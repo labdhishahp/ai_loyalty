@@ -59,6 +59,29 @@ cp .env.example .env          # add your Supabase connection string
 python db/migrate.py          # create the lmart schema
 ```
 
+## Configuration
+
+`cp .env.example .env` and fill in what the current milestone needs. Every
+variable is documented in the template with what it is and when it is first
+required; the table below is the summary.
+
+| Variable | Needed from | Why |
+| -------- | ----------- | --- |
+| `DATABASE_URL` | now | Direct connection (5432). Migrations, COPY and tests need a real session. |
+| `DATABASE_POOL_URL` | slice 1.5 | Transaction pooler (6543). The database allows 60 connections and serverless scales past that. |
+| `LLM_PROVIDER` | slice 1.5 | `coe` or `anthropic`. The agent, trace and eval never learn which answered. |
+| `COE_BASE_URL` / `COE_API_KEY` / `COE_MODEL` | slice 1.5 | OpenAI-compatible gateway serving Qwen. |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | optional | Only when `LLM_PROVIDER=anthropic`. |
+| `AGENT_MAX_STEPS` / `AGENT_MAX_RUN_TOKENS` / `AGENT_MAX_RUN_COST_USD` / `AGENT_ENABLED` | optional | Bounded turns, token ceiling, spend cap, kill switch. Defaults live in code. |
+| `HF_TOKEN` | Milestone 2 | Embeddings via `BAAI/bge-small-en-v1.5` (384-d). |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` | optional | Dimension is derived from the model in code so the two cannot drift. |
+| `APP_API_KEY` | slice 1.6 | Shared secret. A deployed API that runs model calls must not be open. |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | Milestone 4 | Supabase Auth for the approval workflow. |
+| `NEXT_PUBLIC_*` | slice 1.6 | The only values that reach a browser. The anon key is public by design; the service role key must never appear here. |
+
+A **blank** value means unset, everywhere — `core/config.py` enforces that, so an
+unfilled placeholder does not shadow a code default.
+
 ## Working with the dataset
 
 ```bash

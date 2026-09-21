@@ -1,5 +1,7 @@
 README.md
 pyproject.toml
+core/__init__.py
+core/config.py
 lmart.egg-info/PKG-INFO
 lmart.egg-info/SOURCES.txt
 lmart.egg-info/dependency_links.txt
@@ -20,6 +22,7 @@ seed/reference.py
 seed/simulate.py
 seed/verify.py
 tests/test_cohort.py
+tests/test_config.py
 tests/test_metric_sql.py
 tests/test_metric_values.py
 tests/test_row_shapes.py
