@@ -14,6 +14,12 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
+# Declared explicitly because the repo has two top-level directories and
+# setuptools refuses to guess between them. `db/` holds scripts run directly
+# (python db/migrate.py), not an importable package -- only `seed` is imported.
+[tool.setuptools]
+packages = ["seed"]
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 

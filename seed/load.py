@@ -39,6 +39,38 @@ from . import generate, simulate
 BATCH_ROWS = 10_000
 
 
+def build_plan(customers, ref, tables):
+    """(table, columns, rows) for every table, in foreign-key order.
+
+    Returned rather than inlined so that tests/test_row_shapes.py checks the same
+    plan this loader uses. A column list that drifts out of step with its row
+    tuples would otherwise fail only at COPY time, against a real database.
+
+    points_ledger and campaign_events both reference orders, so orders must
+    already be present when they load.
+    """
+    return [
+        ("loyalty_tiers", generate.TIER_COLUMNS,
+         generate.dict_rows(ref.tiers, generate.TIER_COLUMNS)),
+        ("stores", generate.STORE_COLUMNS,
+         generate.dict_rows(ref.stores, generate.STORE_COLUMNS)),
+        ("categories", generate.CATEGORY_COLUMNS,
+         generate.dict_rows(ref.categories, generate.CATEGORY_COLUMNS)),
+        ("products", generate.PRODUCT_COLUMNS,
+         generate.dict_rows(ref.products, generate.PRODUCT_COLUMNS)),
+        ("customers", generate.CUSTOMER_COLUMNS,
+         generate.customer_rows(customers)),
+        ("loyalty_accounts", generate.LOYALTY_ACCOUNT_COLUMNS,
+         generate.loyalty_account_rows(customers)),
+        ("tier_history", simulate.TIER_HISTORY_COLUMNS, tables.tier_history),
+        ("orders", simulate.ORDER_COLUMNS, tables.orders),
+        ("order_items", simulate.ORDER_ITEM_COLUMNS, tables.order_items),
+        ("points_ledger", simulate.POINTS_COLUMNS, tables.points_ledger),
+        ("campaigns", simulate.CAMPAIGN_COLUMNS, tables.campaigns),
+        ("campaign_events", simulate.CAMPAIGN_EVENT_COLUMNS, tables.campaign_events),
+    ]
+
+
 def copy_rows(conn, table: str, columns, rows) -> int:
     """Stream rows into lmart.<table> via COPY, buffering to bound memory."""
     buffer = io.StringIO()
@@ -75,28 +107,7 @@ def main() -> int:
     started = time.time()
     customers, ref, tables = generate.build()
 
-    # Load order is foreign-key order: points_ledger and campaign_events both
-    # reference orders, so orders must already be present when they load.
-    plan = [
-        ("loyalty_tiers", generate.TIER_COLUMNS,
-         generate.dict_rows(ref.tiers, generate.TIER_COLUMNS)),
-        ("stores", generate.STORE_COLUMNS,
-         generate.dict_rows(ref.stores, generate.STORE_COLUMNS)),
-        ("categories", generate.CATEGORY_COLUMNS,
-         generate.dict_rows(ref.categories, generate.CATEGORY_COLUMNS)),
-        ("products", generate.PRODUCT_COLUMNS,
-         generate.dict_rows(ref.products, generate.PRODUCT_COLUMNS)),
-        ("customers", generate.CUSTOMER_COLUMNS,
-         generate.customer_rows(customers)),
-        ("loyalty_accounts", generate.LOYALTY_ACCOUNT_COLUMNS,
-         generate.loyalty_account_rows(customers)),
-        ("tier_history", simulate.TIER_HISTORY_COLUMNS, tables.tier_history),
-        ("orders", simulate.ORDER_COLUMNS, tables.orders),
-        ("order_items", simulate.ORDER_ITEM_COLUMNS, tables.order_items),
-        ("points_ledger", simulate.POINTS_COLUMNS, tables.points_ledger),
-        ("campaigns", simulate.CAMPAIGN_COLUMNS, tables.campaigns),
-        ("campaign_events", simulate.CAMPAIGN_EVENT_COLUMNS, tables.campaign_events),
-    ]
+    plan = build_plan(customers, ref, tables)
 
     print(f"Loading into Postgres ({time.time() - started:.1f}s to build)...")
     with psycopg.connect(url, autocommit=False) as conn:

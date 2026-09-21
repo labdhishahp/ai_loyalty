@@ -43,7 +43,8 @@ Those land in the slices that need them.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
+
 
 cp .env.example .env          # add your Supabase connection string
 python db/migrate.py          # create the lmart schema
@@ -56,6 +57,7 @@ python -m seed.load --reset   # generate in memory, COPY into Postgres
 python -m seed.verify         # integrity + planted signals, in SQL
 python -m seed.generate       # optional: build only, print counts, no database
 python -m seed.ablate         # ~60s: re-measure each cause's contribution
+pytest                        # row shapes and null handling, no database needed
 ```
 
 **Postgres is the source of truth.** The generator builds the dataset in memory
