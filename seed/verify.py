@@ -1,317 +1,345 @@
-"""Assert that every planted signal is actually present in the generated data.
+"""Verify the loaded dataset in Postgres.
 
-This is the first eval in the project, and it grades the DATASET, not the agent.
-A seed whose intended causes are too weak to detect, or whose red herrings are
-too weak to mislead, would make every downstream measurement meaningless -- the
-agent could look right or wrong for reasons that have nothing to do with the agent.
+Two sections, and the split matters:
 
-Deliberately reads the CSVs and does its own aggregation rather than querying
-Postgres. If it used the same SQL the metrics layer will use, a shared
-misunderstanding of the schema would pass both checks.
+  A. STRUCTURAL INTEGRITY -- does the data obey its own rules?
+     Do order headers equal the sum of their lines? Does any points balance ever
+     go negative? Does every account have exactly one open tier row?
+     These checks are only possible against the loaded database, and they are
+     the reason this file stopped working on CSV files. A generator bug in the
+     FIFO points logic, or a header/line arithmetic slip, is invisible in a flat
+     file and obvious here.
+
+  B. PLANTED SIGNALS -- is the intended causal structure present and findable?
+     This is the first eval in the project, and it grades the DATASET, not the
+     agent. A seed whose causes are too weak to detect, or whose red herrings
+     are too weak to mislead, would make every downstream measurement
+     meaningless: the agent could look right or wrong for reasons that have
+     nothing to do with the agent.
+
+ON THE RISK OF A TAUTOLOGY: this file writes its own SQL and will share no code
+with the metrics layer, so a misunderstanding of the schema cannot pass both by
+being made once. More importantly, the numbers it asserts against come from
+independent sources -- the generator's own constants in seed/config.py, and the
+counterfactual attribution measured by seed/ablate.py -- not from these queries.
 
 Run:  python -m seed.verify
 """
 
 from __future__ import annotations
 
-import csv
+import os
 import sys
-from collections import defaultdict
 from datetime import date
+
+import psycopg
+from dotenv import load_dotenv
 
 from . import config
 
 FAILURES: list[str] = []
 
+FOCUS_START = config.FOCUS_PERIOD_START                 # 2026-06-01
+FOCUS_END = date(2026, 9, 1)                            # exclusive
+PRIOR_START = date(2025, 6, 1)
+PRIOR_END = date(2025, 9, 1)                            # exclusive
+MONTHS = 3
+
 
 def check(label: str, passed: bool, detail: str) -> None:
-    mark = "PASS" if passed else "FAIL"
-    print(f"  [{mark}] {label}\n         {detail}")
+    print(f"  [{'PASS' if passed else 'FAIL'}] {label}\n         {detail}")
     if not passed:
         FAILURES.append(label)
-
-
-def load(name: str) -> list[dict]:
-    with (config.OUT_DIR / f"{name}.csv").open() as handle:
-        return list(csv.DictReader(handle))
-
-
-def month_of(iso: str) -> str:
-    return iso[:7]
 
 
 def pct(new: float, old: float) -> float:
     return (new - old) / old * 100 if old else 0.0
 
 
+# ---------------------------------------------------------------------------
+# A. Structural integrity
+# ---------------------------------------------------------------------------
+# Each query returns a count of violations, which must be zero.
+
+INTEGRITY = [
+    ("Order headers equal the sum of their lines", """
+        select count(*) from (
+            select o.order_id
+            from lmart.orders o
+            join lmart.order_items oi on oi.order_id = o.order_id
+            group by o.order_id, o.gross_amount_minor
+            having o.gross_amount_minor <> sum(oi.line_amount_minor)
+        ) violations
+    """),
+    ("net = gross - discount on every order", """
+        select count(*) from lmart.orders
+        where net_amount_minor <> gross_amount_minor - discount_minor
+    """),
+    ("No order exists without lines", """
+        select count(*) from lmart.orders o
+        where not exists (
+            select 1 from lmart.order_items oi where oi.order_id = o.order_id)
+    """),
+    # The end-to-end test of the FIFO points-lot logic. If redemption ever spent
+    # points that were not there, or expiry removed points twice, a running
+    # balance goes negative somewhere.
+    ("No points balance ever goes negative", """
+        select count(*) from (
+            select sum(points) over (
+                partition by account_id order by occurred_at, entry_id) as balance
+            from lmart.points_ledger
+        ) running where balance < 0
+    """),
+    ("Every account has exactly one open tier_history row", """
+        select count(*) from (
+            select account_id, count(*) filter (where effective_to is null) as open_rows
+            from lmart.tier_history group by account_id
+        ) per_account where open_rows <> 1
+    """),
+    ("No account has overlapping tier_history spans", """
+        select count(*)
+        from lmart.tier_history a
+        join lmart.tier_history b
+          on a.account_id = b.account_id
+         and a.tier_history_id < b.tier_history_id
+        where a.effective_from < coalesce(b.effective_to, 'infinity'::date)
+          and b.effective_from < coalesce(a.effective_to, 'infinity'::date)
+    """),
+    ("order_id is set on 'converted' events and only those", """
+        select count(*) from lmart.campaign_events
+        where (event_type = 'converted') <> (order_id is not null)
+    """),
+    ("Every conversion falls inside its campaign's attribution window", """
+        select count(*)
+        from lmart.campaign_events e
+        join lmart.campaigns c on c.campaign_id = e.campaign_id
+        join lmart.orders o on o.order_id = e.order_id
+        where e.event_type = 'converted'
+          and (o.ordered_at::date < c.sent_on
+               or o.ordered_at::date > c.sent_on + interval '18 days')
+    """),
+]
+
+
+# ---------------------------------------------------------------------------
+# B. Planted signals
+# ---------------------------------------------------------------------------
+
+# "GB Gold" resolved from tier_history at a point in time -- never from
+# loyalty_accounts.current_tier. Which of the two you use is worth ~21
+# percentage points, which is the whole lesson of this dataset.
+COHORT_METRICS = """
+    with cohort as (
+        select distinct c.customer_id
+        from lmart.customers c
+        join lmart.loyalty_accounts la on la.customer_id = c.customer_id
+        join lmart.tier_history th on th.account_id = la.account_id
+        where c.country_code = 'GB'
+          and th.tier_code = 'GOLD'
+          and th.effective_from <= %(as_of)s
+          and (th.effective_to is null or th.effective_to > %(as_of)s)
+    )
+    select
+        (select count(*) from cohort)                as members,
+        count(o.order_id)                            as orders,
+        coalesce(sum(o.net_amount_minor), 0)         as revenue
+    from cohort
+    left join lmart.orders o
+           on o.customer_id = cohort.customer_id
+          and o.ordered_at >= %(start)s
+          and o.ordered_at <  %(end)s
+"""
+
+
+def cohort_metrics(cur, as_of: date, start: date, end: date):
+    """Return (members, orders per member per month, revenue per member per month)."""
+    cur.execute(COHORT_METRICS, {"as_of": as_of, "start": start, "end": end})
+    members, orders, revenue = cur.fetchone()
+    if not members:
+        return 0, 0.0, 0.0
+    denominator = members * MONTHS
+    return members, orders / denominator, float(revenue) / denominator
+
+
 def main() -> int:
-    if not (config.OUT_DIR / "orders.csv").exists():
-        print("No generated data. Run: python -m seed.generate", file=sys.stderr)
+    load_dotenv()
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        print("DATABASE_URL is not set. Copy .env.example to .env first.",
+              file=sys.stderr)
         return 1
 
-    customers = load("customers")
-    accounts = load("loyalty_accounts")
-    tier_history = load("tier_history")
-    orders = load("orders")
-    order_items = load("order_items")
-    products = load("products")
-    categories = load("categories")
-    campaigns = load("campaigns")
-    campaign_events = load("campaign_events")
-    points = load("points_ledger")
+    with psycopg.connect(url) as conn:
+        # Every timestamp is stored as timestamptz and every boundary below is a
+        # bare date. Pinning the session to UTC makes that cast deterministic
+        # rather than dependent on whatever the server's default happens to be.
+        conn.execute("set time zone 'UTC'")
+        cur = conn.cursor()
 
-    country_of = {int(c["customer_id"]): c["country_code"] for c in customers}
-    account_customer = {int(a["account_id"]): int(a["customer_id"]) for a in accounts}
-    category_of_product = {
-        int(p["product_id"]): int(p["category_id"]) for p in products}
-    category_code = {int(c["category_id"]): c["code"] for c in categories}
+        if cur.execute("select count(*) from lmart.orders").fetchone()[0] == 0:
+            print("No data loaded. Run: python -m seed.load --reset", file=sys.stderr)
+            return 1
 
-    # --- tier as at a date, from tier_history (never from current_tier) -------
-    spans_by_customer: dict[int, list[tuple[date, date | None, str]]] = defaultdict(list)
-    for row in tier_history:
-        customer_id = account_customer[int(row["account_id"])]
-        spans_by_customer[customer_id].append((
-            date.fromisoformat(row["effective_from"]),
-            date.fromisoformat(row["effective_to"]) if row["effective_to"] else None,
-            row["tier_code"],
-        ))
+        print("\nL-Mart dataset verification")
+        print(f"  focus period      {FOCUS_START} .. {FOCUS_END} (exclusive)")
+        print(f"  YoY comparison    {PRIOR_START} .. {PRIOR_END} (exclusive)")
 
-    def tier_on(customer_id: int, when: date) -> str | None:
-        for start, end, tier in spans_by_customer.get(customer_id, ()):
-            if start <= when and (end is None or when < end):
-                return tier
-        return None
+        print("\nA. Structural integrity")
+        for label, sql in INTEGRITY:
+            violations = cur.execute(sql).fetchone()[0]
+            check(label, violations == 0, f"{violations} violation(s)")
 
-    # --- order aggregates ----------------------------------------------------
-    orders_by_month_customer: dict[tuple[str, int], int] = defaultdict(int)
-    revenue_by_month_customer: dict[tuple[str, int], int] = defaultdict(int)
-    for row in orders:
-        key = (month_of(row["ordered_at"]), int(row["customer_id"]))
-        orders_by_month_customer[key] += 1
-        revenue_by_month_customer[key] += int(row["net_amount_minor"])
+        print("\nB. Planted signals")
 
-    def cohort_stats(months: list[str], members: list[int]) -> tuple[float, float]:
-        """Return (active rate, orders per member per month) for a cohort."""
-        if not members or not months:
-            return 0.0, 0.0
-        active = 0
-        total_orders = 0
-        for month in months:
-            for customer_id in members:
-                count = orders_by_month_customer.get((month, customer_id), 0)
-                total_orders += count
-                if count:
-                    active += 1
-        denominator = len(members) * len(months)
-        return active / denominator, total_orders / denominator
+        # --- headline ------------------------------------------------------
+        members_now, orders_now, revenue_now = cohort_metrics(
+            cur, FOCUS_START, FOCUS_START, FOCUS_END)
+        members_then, orders_then, revenue_then = cohort_metrics(
+            cur, PRIOR_START, PRIOR_START, PRIOR_END)
+        orders_drop = pct(orders_now, orders_then)
+        revenue_drop = pct(revenue_now, revenue_then)
 
-    def months_in(start: date, end: date) -> list[str]:
-        out, year, month = [], start.year, start.month
-        while (year, month) <= (end.year, end.month):
-            out.append(f"{year:04d}-{month:02d}")
-            month += 1
-            if month == 13:
-                year, month = year + 1, 1
-        return out
+        check(
+            "HEADLINE  GB Gold order frequency down year-over-year",
+            orders_drop <= -20,
+            f"orders/member/month {orders_then:.3f} -> {orders_now:.3f} "
+            f"({orders_drop:+.1f}%), cohort {members_then} -> {members_now}",
+        )
+        # Checked separately because "engagement" is not one number, and the
+        # planted causes do not all land on the same one.
+        check(
+            "HEADLINE  GB Gold spend per member down year-over-year",
+            revenue_drop <= -20,
+            f"net revenue/member/month GBP {revenue_then / 100:,.2f} -> "
+            f"{revenue_now / 100:,.2f} ({revenue_drop:+.1f}%)",
+        )
 
-    focus = months_in(config.FOCUS_PERIOD_START, config.FOCUS_PERIOD_END)
-    prior_year = months_in(
-        date(config.FOCUS_PERIOD_START.year - 1, config.FOCUS_PERIOD_START.month, 1),
-        date(config.FOCUS_PERIOD_END.year - 1, config.FOCUS_PERIOD_END.month, 28))
+        # --- R1: country totals are UP, masking the problem ----------------
+        gb_revenue = """
+            select coalesce(sum(o.net_amount_minor), 0)
+            from lmart.orders o
+            join lmart.customers c on c.customer_id = o.customer_id
+            where c.country_code = 'GB'
+              and o.ordered_at >= %s and o.ordered_at < %s
+        """
+        gb_now = cur.execute(gb_revenue, (FOCUS_START, FOCUS_END)).fetchone()[0]
+        gb_then = cur.execute(gb_revenue, (PRIOR_START, PRIOR_END)).fetchone()[0]
+        check(
+            "R1  GB total revenue is UP while GB Gold is down (masking)",
+            gb_now > gb_then,
+            f"GB net revenue GBP {gb_then / 100:,.0f} -> {gb_now / 100:,.0f} "
+            f"({pct(float(gb_now), float(gb_then)):+.1f}%)",
+        )
 
-    print("\nL-Mart seed verification")
-    print(f"  focus period      {focus[0]} .. {focus[-1]}")
-    print(f"  YoY comparison    {prior_year[0]} .. {prior_year[-1]}\n")
+        # --- C1: the reactivation programme stopped ------------------------
+        waves = cur.execute("""
+            select to_char(c.sent_on, 'YYYY-MM') as month,
+                   count(*) filter (where e.event_type = 'sent') as audience
+            from lmart.campaigns c
+            left join lmart.campaign_events e on e.campaign_id = c.campaign_id
+            where c.programme = %s
+            group by c.campaign_id, c.sent_on
+            order by c.sent_on
+        """, (config.CAMPAIGN_PROGRAMME,)).fetchall()
+        wave_months = [row[0] for row in waves]
+        audiences = sorted(row[1] for row in waves)
+        in_focus = [m for m in wave_months if m >= FOCUS_START.strftime("%Y-%m")]
+        check(
+            "C1  UK Gold Reactivation ran monthly then stopped before the focus period",
+            len(waves) >= 18 and not in_focus,
+            f"{len(waves)} waves, {wave_months[0]} .. {wave_months[-1]}, "
+            f"0 in focus period; audience per wave min {audiences[0]} / "
+            f"median {audiences[len(audiences) // 2]} / max {audiences[-1]}",
+        )
 
-    # =====================================================================
-    # HEADLINE: GB Gold engagement is measurably down year over year.
-    # =====================================================================
-    gb_gold_now = [
-        int(c["customer_id"]) for c in customers
-        if c["country_code"] == "GB"
-        and tier_on(int(c["customer_id"]), config.FOCUS_PERIOD_END) == "GOLD"
-    ]
-    gb_gold_prior = [
-        int(c["customer_id"]) for c in customers
-        if c["country_code"] == "GB"
-        and tier_on(int(c["customer_id"]), date(2025, 8, 31)) == "GOLD"
-    ]
-    active_now, opm_now = cohort_stats(focus, gb_gold_now)
-    active_prior, opm_prior = cohort_stats(prior_year, gb_gold_prior)
-    drop = pct(opm_now, opm_prior)
-    check(
-        "HEADLINE  GB Gold order frequency down year-over-year",
-        drop <= -20,
-        f"orders/member/month {opm_prior:.3f} -> {opm_now:.3f} ({drop:+.1f}%), "
-        f"active rate {active_prior:.1%} -> {active_now:.1%}, "
-        f"cohort size {len(gb_gold_prior)} -> {len(gb_gold_now)}",
-    )
+        digest_months = [r[0] for r in cur.execute("""
+            select distinct to_char(sent_on, 'YYYY-MM')
+            from lmart.campaigns where programme = %s order by 1
+        """, (config.DIGEST_PROGRAMME,)).fetchall()]
+        focus_months = ["2026-06", "2026-07", "2026-08"]
+        check(
+            "C1b Control programme kept running through the focus period",
+            all(m in digest_months for m in focus_months),
+            f"{config.DIGEST_PROGRAMME}: {len(digest_months)} waves, "
+            f"last {digest_months[-1]}",
+        )
 
-    # Checked separately because "engagement" is not one number. The causes do
-    # not all land on the same metric, so a dataset that moved only one of them
-    # would quietly make half the answer key unreachable.
-    def cohort_revenue(months: list[str], members: list[int]) -> float:
-        if not members or not months:
-            return 0.0
-        total = sum(revenue_by_month_customer.get((m, c), 0)
-                    for m in months for c in members)
-        return total / (len(members) * len(months))
+        # --- C2: the GB Beauty stockout ------------------------------------
+        beauty = dict(cur.execute("""
+            select to_char(o.ordered_at, 'YYYY-MM') as month,
+                   sum(oi.line_amount_minor)
+            from lmart.orders o
+            join lmart.customers c  on c.customer_id = o.customer_id
+            join lmart.order_items oi on oi.order_id = o.order_id
+            join lmart.products p   on p.product_id = oi.product_id
+            join lmart.categories cat on cat.category_id = p.category_id
+            where c.country_code = %s and cat.code = 'BEAUTY'
+            group by 1
+        """, (config.BEAUTY_STOCKOUT_COUNTRY,)).fetchall())
+        before = [float(beauty.get(m, 0)) for m in ("2026-01", "2026-02", "2026-03")]
+        after = [float(beauty.get(m, 0)) for m in focus_months]
+        beauty_change = pct(sum(after) / 3, sum(before) / 3)
+        check(
+            "C2  GB Beauty revenue collapsed from the stockout date",
+            beauty_change <= -40,
+            f"GBP/month {sum(before) / 300:,.0f} (Jan-Mar) -> "
+            f"{sum(after) / 300:,.0f} (focus) ({beauty_change:+.1f}%)",
+        )
 
-    rev_now = cohort_revenue(focus, gb_gold_now)
-    rev_prior = cohort_revenue(prior_year, gb_gold_prior)
-    rev_drop = pct(rev_now, rev_prior)
-    check(
-        "HEADLINE  GB Gold spend per member down year-over-year",
-        rev_drop <= -20,
-        f"net revenue/member/month GBP {rev_prior / 100:,.2f} -> "
-        f"{rev_now / 100:,.2f} ({rev_drop:+.1f}%)",
-    )
+        # --- C3: composition effect ----------------------------------------
+        # Same query, one parameter different: resolve the cohort as it stood in
+        # January 2026 instead of today. That single change is the discriminator.
+        _, fixed_now, _ = cohort_metrics(cur, date(2026, 1, 15), FOCUS_START, FOCUS_END)
+        _, fixed_then, _ = cohort_metrics(cur, date(2026, 1, 15), PRIOR_START, PRIOR_END)
+        fixed_drop = pct(fixed_now, fixed_then)
+        promotions = cur.execute("""
+            select count(*) from lmart.tier_history
+            where reason = 'upgrade' and effective_from = %s
+        """, (config.TIER_REVIEW_DATE,)).fetchone()[0]
+        check(
+            "C3  Composition effect present, but a real behaviour change remains",
+            fixed_drop > orders_drop + 8 and fixed_drop <= -8,
+            f"fixed Jan-2026 Gold cohort {fixed_drop:+.1f}% vs currently-Gold "
+            f"{orders_drop:+.1f}%: {fixed_drop - orders_drop:+.1f}pp is composition, "
+            f"{fixed_drop:+.1f}pp is genuine; {promotions} promotions on "
+            f"{config.TIER_REVIEW_DATE}",
+        )
 
-    # =====================================================================
-    # R1 (red herring): GB overall revenue is UP. A country-level check alone
-    # would conclude nothing is wrong.
-    # =====================================================================
-    gb_customers = [int(c["customer_id"]) for c in customers if c["country_code"] == "GB"]
-    gb_now = sum(revenue_by_month_customer.get((m, c), 0)
-                 for m in focus for c in gb_customers)
-    gb_prior = sum(revenue_by_month_customer.get((m, c), 0)
-                   for m in prior_year for c in gb_customers)
-    check(
-        "R1  GB total revenue is UP while GB Gold is down (masking)",
-        gb_now > gb_prior,
-        f"GB net revenue GBP {gb_prior / 100:,.0f} -> {gb_now / 100:,.0f} "
-        f"({pct(gb_now, gb_prior):+.1f}%)",
-    )
+        # --- R3: the points expiry spike -----------------------------------
+        expiries = dict(cur.execute("""
+            select to_char(occurred_at, 'YYYY-MM'), -sum(points)
+            from lmart.points_ledger where entry_type = 'expire' group by 1
+        """).fetchall())
+        policy_month = config.POINTS_POLICY_CHANGE_DATE.strftime("%Y-%m")
+        others = sorted(float(v) for m, v in expiries.items() if m != policy_month)
+        typical = others[len(others) // 2] if others else 0.0
+        spike = float(expiries.get(policy_month, 0))
+        peak = max(expiries, key=lambda m: expiries[m]) if expiries else None
+        check(
+            "R3  Points expiry is a discrete spike on the policy change date",
+            peak == policy_month and typical > 0 and spike >= 3 * typical,
+            f"{spike:,.0f} points expired in {peak} vs a typical month of "
+            f"{typical:,.0f} ({spike / typical:.1f}x)" if typical else "no baseline",
+        )
 
-    # =====================================================================
-    # C1: the reactivation programme stopped after May 2026.
-    # =====================================================================
-    react = [c for c in campaigns if c["programme"] == config.CAMPAIGN_PROGRAMME]
-    react_months = sorted({c["sent_on"][:7] for c in react})
-    react_in_focus = [m for m in react_months if m in focus]
-    sent_by_campaign: dict[int, int] = defaultdict(int)
-    for event in campaign_events:
-        if event["event_type"] == "sent":
-            sent_by_campaign[int(event["campaign_id"])] += 1
-    react_audience = [sent_by_campaign[int(c["campaign_id"])] for c in react]
-    check(
-        "C1  UK Gold Reactivation ran monthly then stopped before the focus period",
-        len(react) >= 18 and not react_in_focus,
-        f"{len(react)} waves, {react_months[0]} .. {react_months[-1]}, "
-        f"0 in focus period; audience per wave "
-        f"min {min(react_audience)} / median "
-        f"{sorted(react_audience)[len(react_audience) // 2]} / max {max(react_audience)}",
-    )
-
-    # ... and that a control programme did NOT stop, so "marketing stopped" is wrong.
-    digest_months = sorted({c["sent_on"][:7] for c in campaigns
-                            if c["programme"] == config.DIGEST_PROGRAMME})
-    check(
-        "C1b Control programme kept running through the focus period",
-        all(m in digest_months for m in focus),
-        f"{config.DIGEST_PROGRAMME}: {len(digest_months)} waves, "
-        f"last {digest_months[-1]}",
-    )
-
-    # =====================================================================
-    # C2: GB Beauty revenue collapses from April 2026.
-    # =====================================================================
-    order_country = {int(o["order_id"]): country_of[int(o["customer_id"])] for o in orders}
-    order_month = {int(o["order_id"]): month_of(o["ordered_at"]) for o in orders}
-    beauty_id = next(int(c["category_id"]) for c in categories if c["code"] == "BEAUTY")
-    gb_beauty_by_month: dict[str, int] = defaultdict(int)
-    for item in order_items:
-        order_id = int(item["order_id"])
-        if order_country[order_id] != "GB":
-            continue
-        if category_of_product[int(item["product_id"])] != beauty_id:
-            continue
-        gb_beauty_by_month[order_month[order_id]] += int(item["line_amount_minor"])
-    before = [gb_beauty_by_month.get(m, 0) for m in ("2026-01", "2026-02", "2026-03")]
-    after = [gb_beauty_by_month.get(m, 0) for m in focus]
-    beauty_change = pct(sum(after) / len(after), sum(before) / len(before))
-    check(
-        "C2  GB Beauty revenue collapsed from the stockout date",
-        beauty_change <= -40,
-        f"GBP/month {sum(before) / len(before) / 100:,.0f} (Jan-Mar) -> "
-        f"{sum(after) / len(after) / 100:,.0f} (focus) ({beauty_change:+.1f}%)",
-    )
-
-    # =====================================================================
-    # C3: composition effect. A FIXED cohort declines much less than the
-    # "currently Gold" population -- because the best members left the tier.
-    # =====================================================================
-    fixed_cohort = [
-        int(c["customer_id"]) for c in customers
-        if c["country_code"] == "GB"
-        and tier_on(int(c["customer_id"]), date(2026, 1, 15)) == "GOLD"
-    ]
-    _, opm_fixed_now = cohort_stats(focus, fixed_cohort)
-    _, opm_fixed_prior = cohort_stats(prior_year, fixed_cohort)
-    fixed_drop = pct(opm_fixed_now, opm_fixed_prior)
-    promotions = [
-        r for r in tier_history
-        if r["reason"] == "upgrade"
-        and r["effective_from"] == config.TIER_REVIEW_DATE.isoformat()
-    ]
-    check(
-        "C3  Composition effect present, but a real behaviour change remains",
-        fixed_drop > drop + 8 and fixed_drop <= -8,
-        f"fixed Jan-2026 Gold cohort {fixed_drop:+.1f}% vs currently-Gold "
-        f"{drop:+.1f}%: {fixed_drop - drop:+.1f}pp is composition, "
-        f"{fixed_drop:+.1f}pp is genuine; "
-        f"{len(promotions)} promotions on {config.TIER_REVIEW_DATE}",
-    )
-
-    # =====================================================================
-    # C4: a points expiry wave in early 2026.
-    # =====================================================================
-    expiry_by_month: dict[str, int] = defaultdict(int)
-    for entry in points:
-        if entry["entry_type"] == "expire":
-            expiry_by_month[month_of(entry["occurred_at"])] += -int(entry["points"])
-    expiry_months = sorted(expiry_by_month)
-    peak = max(expiry_by_month, key=lambda m: expiry_by_month[m]) if expiry_by_month else None
-    # The previous version of this check accepted any peak in 2026-0*, which a
-    # steadily rising trend satisfies. Expiries grow with earnings, so a trend is
-    # the null result -- the assertion must be that there is a discrete SPIKE on
-    # the policy change date, several times any ordinary month.
-    others = sorted(v for m, v in expiry_by_month.items()
-                    if m != config.POINTS_POLICY_CHANGE_DATE.strftime("%Y-%m"))
-    typical = others[len(others) // 2] if others else 0
-    spike = expiry_by_month.get(config.POINTS_POLICY_CHANGE_DATE.strftime("%Y-%m"), 0)
-    check(
-        "R3  Points expiry is a discrete spike on the policy change date",
-        peak == config.POINTS_POLICY_CHANGE_DATE.strftime("%Y-%m")
-        and typical > 0 and spike >= 3 * typical,
-        f"{spike:,} points expired in {peak} vs a typical month of "
-        f"{typical:,} ({spike / typical:.1f}x)" if typical else "no baseline",
-    )
-
-    # =====================================================================
-    # R2 (red herring): a global channel shift, affecting everyone equally.
-    # =====================================================================
-    channel_by_month: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for row in orders:
-        channel_by_month[month_of(row["ordered_at"])][row["channel"]] += 1
-
-    def app_share(month: str) -> float:
-        counts = channel_by_month[month]
-        total = sum(counts.values())
-        return counts["app"] / total if total else 0.0
-
-    check(
-        "R2  Global app share rose during the focus period (affects all cohorts)",
-        app_share(focus[-1]) - app_share("2026-05") > 0.05,
-        f"app share 2026-05 {app_share('2026-05'):.1%} -> "
-        f"{focus[-1]} {app_share(focus[-1]):.1%}",
-    )
+        # --- R2: the global channel shift ----------------------------------
+        shares = dict(cur.execute("""
+            select to_char(ordered_at, 'YYYY-MM'),
+                   count(*) filter (where channel = 'app')::numeric / count(*)
+            from lmart.orders group by 1
+        """).fetchall())
+        check(
+            "R2  Global app share rose during the focus period (affects all cohorts)",
+            float(shares["2026-08"]) - float(shares["2026-05"]) > 0.05,
+            f"app share 2026-05 {float(shares['2026-05']):.1%} -> "
+            f"2026-08 {float(shares['2026-08']):.1%}",
+        )
 
     print()
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed: {', '.join(FAILURES)}")
         return 1
-    print("All planted signals verified.")
+    print("Structural integrity holds and all planted signals verified.")
     return 0
 
 

@@ -157,9 +157,10 @@ exactly the failure mode worth measuring.
 ## Regenerating
 
 ```bash
-python -m seed.generate   # ~1.5s, deterministic (RANDOM_SEED in seed/config.py)
-python -m seed.verify     # asserts every signal above is present
-python -m seed.ablate     # ~60s, re-measures the attribution table
+python -m seed.load --reset   # build and load into Postgres (deterministic:
+                              # RANDOM_SEED in seed/config.py)
+python -m seed.verify         # asserts every signal above is present
+python -m seed.ablate         # ~60s, re-measures the attribution table
 ```
 
 If you change anything in `seed/config.py`, re-run all three — and update the

@@ -106,7 +106,7 @@ def build(rng: random.Random) -> Reference:
                 # a trend. Store *closure* is left available as a hypothesis the
                 # agent can check and correctly rule out (there are none).
                 "opened_on": "2019-03-01",
-                "closed_on": "",
+                "closed_on": None,
             })
             store_id += 1
 

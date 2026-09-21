@@ -120,9 +120,18 @@ doesn't, so nothing later requires a rewrite.
 
 ## Current state
 
-**Milestone 1, slice 1 complete:** business schema, deterministic seed generator,
-signal verification, and a measured causal attribution for the answer key.
-See [planted-truths.md](planted-truths.md).
+**Milestone 1, slice 1 complete:** business schema, deterministic seed generator
+loading directly into Supabase Postgres, verification in SQL covering both
+structural integrity and the planted signals, and a measured causal attribution
+for the answer key. See [planted-truths.md](planted-truths.md).
+
+**Postgres is the source of truth from this slice onward.** An earlier version
+kept generated CSVs as the primary dataset and verified against those files. That
+had a blind spot exactly where the risk was: CSV checks pass on data the schema
+might not even accept, so column types, `CHECK` constraints, foreign keys and
+NULL handling went untested. Verifying in SQL also exercises the same joins,
+indexes and fan-out hazards the metrics layer is about to depend on, and enables
+integrity checks that flat files cannot express.
 
 Not yet built: metrics layer, tool registry, agent runtime, operations tables.
 Operations tables are deliberately absent — no consumer exists yet, and they will

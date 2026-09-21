@@ -3,6 +3,5 @@ __pycache__/
 .venv/
 venv/
 .env
-seed/out/
 .pytest_cache/
 .DS_Store

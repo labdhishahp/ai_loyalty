@@ -28,9 +28,11 @@ behind each decision.
 **Milestone 1, slice 1 — the data foundation.** Complete.
 
 - 12-table business schema for customers, loyalty, transactions, points and campaigns
-- A deterministic generator producing ~118k orders and ~266k order lines over 24 months
+- A deterministic generator producing ~118k orders and ~266k order lines over 24 months,
+  loaded straight into Supabase Postgres
 - Four causal mechanisms and three red herrings planted in that data
-- A verifier that asserts every planted signal is present and findable
+- A verifier running in SQL against the loaded database, covering both
+  structural integrity and every planted signal
 - An ablation study that **measures** each cause's contribution, so the eval
   answer key is evidence rather than assertion
 
@@ -50,11 +52,26 @@ python db/migrate.py          # create the lmart schema
 ## Working with the dataset
 
 ```bash
-python -m seed.generate       # ~1.5s  -> CSVs in seed/out/
-python -m seed.verify         # ~2s    assert every planted signal is present
-python -m seed.load --reset   # ~10s   COPY into Postgres
-python -m seed.ablate         # ~60s   re-measure each cause's contribution
+python -m seed.load --reset   # generate in memory, COPY into Postgres
+python -m seed.verify         # integrity + planted signals, in SQL
+python -m seed.generate       # optional: build only, print counts, no database
+python -m seed.ablate         # ~60s: re-measure each cause's contribution
 ```
+
+**Postgres is the source of truth.** The generator builds the dataset in memory
+and streams it straight into Supabase — there is no intermediate file, so there
+is never a question of which copy is current.
+
+`seed/verify.py` checks two things against the loaded database: that the data
+obeys its own rules (order headers equal the sum of their lines, no points
+balance ever goes negative, no overlapping tier spans), and that every planted
+causal signal is present and findable. The first group is only possible against
+a real database, and it is why verification lives there rather than in files.
+
+`seed/ablate.py` is the deliberate exception: it runs 25 full simulations to
+measure each cause counterfactually, and routing those through the network would
+turn a one-minute study into many minutes for no benefit. Ablation is a question
+about the *generator*, not about storage.
 
 Generation is deterministic: the same `RANDOM_SEED` produces byte-identical
 output. That is a correctness requirement, not a convenience — evals compare agent
@@ -70,7 +87,9 @@ db/migrations/   numbered SQL, applied once, never edited after the fact
 db/migrate.py    the runner (no ORM: the metrics layer will be hand-written SQL)
 seed/config.py   every tunable parameter, and every planted cause, in one file
 seed/simulate.py the chronological day-by-day simulation
-seed/verify.py   grades the dataset, independently of the schema
-seed/ablate.py   counterfactual attribution for the answer key
+seed/generate.py the in-memory pipeline (library + a no-database smoke test)
+seed/load.py     generate and COPY straight into Postgres
+seed/verify.py   integrity and signal checks, in SQL against the database
+seed/ablate.py   counterfactual attribution, in memory, for the answer key
 docs/            architecture and the answer key
 ```

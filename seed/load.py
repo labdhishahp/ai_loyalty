@@ -1,19 +1,32 @@
-"""COPY the generated CSVs into Postgres.
+"""Generate the dataset and load it straight into Postgres.
 
-COPY rather than INSERT: ~380,000 rows across twelve tables. Row-at-a-time
-inserts over a network round trip would take minutes; COPY takes seconds.
+Postgres is the source of truth for L-Mart. There is no intermediate file: the
+generator builds the dataset in memory and this streams it into the database in
+one command, so there is never a "which copy is current?" question to answer.
 
-Uses the DIRECT connection (port 5432), not Supabase's transaction pooler.
-COPY needs a real session, and the pooler is for the many short-lived connections
+WHY COPY RATHER THAN INSERT: ~390,000 rows across twelve tables. Row-at-a-time
+inserts over a network round trip would take many minutes; COPY takes seconds.
+
+WHY CSV TEXT RATHER THAN psycopg's typed write_row: COPY in CSV format lets
+*Postgres* parse every value according to the column's declared type. That means
+the load is also a type check -- a date that isn't a date, or a number that
+overflows, fails here rather than surfacing as a strange metric later. Rows carry
+None for nullable columns; csv.writer renders that as an empty field, and
+`null ''` maps it back to SQL NULL.
+
+WHY THE DIRECT CONNECTION (port 5432) rather than Supabase's transaction pooler:
+COPY needs a real session. The pooler exists for the many short-lived connections
 the API layer will open later -- a different problem with a different answer.
 
-Run:  python -m seed.load          (refuses to overwrite existing data)
-      python -m seed.load --reset  (truncates first)
+Run:  python -m seed.load            (refuses to overwrite existing data)
+      python -m seed.load --reset    (truncates first)
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import os
 import sys
 import time
@@ -21,24 +34,28 @@ import time
 import psycopg
 from dotenv import load_dotenv
 
-from . import config
+from . import generate, simulate
 
-# Load order is foreign-key order. points_ledger and campaign_events both
-# reference orders, so orders must already be present when they load.
-TABLES = [
-    "loyalty_tiers",
-    "stores",
-    "categories",
-    "products",
-    "customers",
-    "loyalty_accounts",
-    "tier_history",
-    "orders",
-    "order_items",
-    "points_ledger",
-    "campaigns",
-    "campaign_events",
-]
+BATCH_ROWS = 10_000
+
+
+def copy_rows(conn, table: str, columns, rows) -> int:
+    """Stream rows into lmart.<table> via COPY, buffering to bound memory."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    statement = (f"copy lmart.{table} ({', '.join(columns)}) from stdin "
+                 f"with (format csv, null '')")
+    count = 0
+    with conn.cursor().copy(statement) as copy:
+        for row in rows:
+            writer.writerow(row)
+            count += 1
+            if count % BATCH_ROWS == 0:
+                copy.write(buffer.getvalue())
+                buffer.seek(0)
+                buffer.truncate(0)
+        copy.write(buffer.getvalue())
+    return count
 
 
 def main() -> int:
@@ -50,16 +67,38 @@ def main() -> int:
     load_dotenv()
     url = os.environ.get("DATABASE_URL")
     if not url:
-        print("DATABASE_URL is not set. Copy .env.example to .env first.", file=sys.stderr)
-        return 1
-
-    missing = [t for t in TABLES if not (config.OUT_DIR / f"{t}.csv").exists()]
-    if missing:
-        print(f"Missing CSVs: {', '.join(missing)}. Run: python -m seed.generate",
+        print("DATABASE_URL is not set. Copy .env.example to .env first.",
               file=sys.stderr)
         return 1
 
+    print("Building dataset in memory...")
     started = time.time()
+    customers, ref, tables = generate.build()
+
+    # Load order is foreign-key order: points_ledger and campaign_events both
+    # reference orders, so orders must already be present when they load.
+    plan = [
+        ("loyalty_tiers", generate.TIER_COLUMNS,
+         generate.dict_rows(ref.tiers, generate.TIER_COLUMNS)),
+        ("stores", generate.STORE_COLUMNS,
+         generate.dict_rows(ref.stores, generate.STORE_COLUMNS)),
+        ("categories", generate.CATEGORY_COLUMNS,
+         generate.dict_rows(ref.categories, generate.CATEGORY_COLUMNS)),
+        ("products", generate.PRODUCT_COLUMNS,
+         generate.dict_rows(ref.products, generate.PRODUCT_COLUMNS)),
+        ("customers", generate.CUSTOMER_COLUMNS,
+         generate.customer_rows(customers)),
+        ("loyalty_accounts", generate.LOYALTY_ACCOUNT_COLUMNS,
+         generate.loyalty_account_rows(customers)),
+        ("tier_history", simulate.TIER_HISTORY_COLUMNS, tables.tier_history),
+        ("orders", simulate.ORDER_COLUMNS, tables.orders),
+        ("order_items", simulate.ORDER_ITEM_COLUMNS, tables.order_items),
+        ("points_ledger", simulate.POINTS_COLUMNS, tables.points_ledger),
+        ("campaigns", simulate.CAMPAIGN_COLUMNS, tables.campaigns),
+        ("campaign_events", simulate.CAMPAIGN_EVENT_COLUMNS, tables.campaign_events),
+    ]
+
+    print(f"Loading into Postgres ({time.time() - started:.1f}s to build)...")
     with psycopg.connect(url, autocommit=False) as conn:
         existing = conn.execute("select count(*) from lmart.customers").fetchone()[0]
         if existing and not args.reset:
@@ -68,29 +107,23 @@ def main() -> int:
             return 1
 
         if args.reset:
-            # One statement so the FK graph never has to be satisfied mid-way.
-            conn.execute(
-                "truncate " + ", ".join(f"lmart.{t}" for t in TABLES) + " cascade")
+            # One statement, so the foreign-key graph never has to be satisfied
+            # part-way through the truncate.
+            conn.execute("truncate " + ", ".join(f"lmart.{t}" for t, _, _ in plan)
+                         + " cascade")
             print("  truncated existing data")
 
-        for table in TABLES:
-            path = config.OUT_DIR / f"{table}.csv"
-            with path.open() as handle:
-                header = handle.readline().strip().split(",")
-                columns = ", ".join(header)
-                # NULL '' maps the empty CSV field to SQL NULL, which is how the
-                # generator writes optional values (closed_on, store_id, order_id).
-                statement = (f"copy lmart.{table} ({columns}) from stdin "
-                             f"with (format csv, null '')")
-                with conn.cursor().copy(statement) as copy:
-                    while chunk := handle.read(1 << 20):
-                        copy.write(chunk)
-            count = conn.execute(f"select count(*) from lmart.{table}").fetchone()[0]
-            print(f"  {count:>9,}  {table}")
+        for table, columns, rows in plan:
+            loaded = copy_rows(conn, table, columns, rows)
+            print(f"  {loaded:>9,}  {table}")
 
+        # Committed only after every table has loaded. A failure part-way leaves
+        # the database empty rather than half-populated -- which matters because
+        # the next thing anyone does is trust these numbers.
         conn.commit()
 
     print(f"\nLoaded in {time.time() - started:.1f}s")
+    print("Next: python -m seed.verify")
     return 0
 
 

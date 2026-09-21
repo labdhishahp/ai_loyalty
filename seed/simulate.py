@@ -133,7 +133,7 @@ def run(customers: list[Customer], ref: Reference,
         c.current_tier = c.initial_tier
         t.tier_history.append((
             tier_history_id, c.account_id, c.initial_tier,
-            c.enrolled_on.isoformat(), "", "enrolment",
+            c.enrolled_on.isoformat(), None, "enrolment",
         ))
         open_tier_row[c.account_id] = len(t.tier_history) - 1
         tier_history_id += 1
@@ -167,7 +167,7 @@ def run(customers: list[Customer], ref: Reference,
                     t.tier_history[idx] = row[:4] + (day.isoformat(),) + row[5:]
                     t.tier_history.append((
                         tier_history_id, c.account_id, "PLATINUM",
-                        day.isoformat(), "", "upgrade",
+                        day.isoformat(), None, "upgrade",
                     ))
                     open_tier_row[c.account_id] = len(t.tier_history) - 1
                     tier_history_id += 1
@@ -204,7 +204,7 @@ def run(customers: list[Customer], ref: Reference,
                 if expired > 0:
                     t.points_ledger.append((
                         entry_id, c.account_id, f"{day.isoformat()} 00:05:00+00",
-                        "expire", -expired, "",
+                        "expire", -expired, None,
                         "Expired under the 2026 points validity policy change"
                         if policy_sweep
                         else f"Points expired after "
@@ -245,12 +245,12 @@ def run(customers: list[Customer], ref: Reference,
                 sent_at = f"{day.isoformat()} 09:00:00+00"
                 for c in audience:
                     t.campaign_events.append(
-                        (event_id, campaign_id, c.customer_id, "sent", sent_at, ""))
+                        (event_id, campaign_id, c.customer_id, "sent", sent_at, None))
                     event_id += 1
                     if rng.random() >= config.CAMPAIGN_DELIVERY_RATE:
                         continue
                     t.campaign_events.append(
-                        (event_id, campaign_id, c.customer_id, "delivered", sent_at, ""))
+                        (event_id, campaign_id, c.customer_id, "delivered", sent_at, None))
                     event_id += 1
 
                     # Lift is applied to everyone who received the email, whether
@@ -264,15 +264,15 @@ def run(customers: list[Customer], ref: Reference,
                     if rng.random() < config.CAMPAIGN_OPEN_RATE:
                         opened_at = f"{day.isoformat()} {rng.randrange(9, 22):02d}:00:00+00"
                         t.campaign_events.append(
-                            (event_id, campaign_id, c.customer_id, "opened", opened_at, ""))
+                            (event_id, campaign_id, c.customer_id, "opened", opened_at, None))
                         event_id += 1
                         if rng.random() < config.CAMPAIGN_CLICK_RATE:
                             t.campaign_events.append(
-                                (event_id, campaign_id, c.customer_id, "clicked", opened_at, ""))
+                                (event_id, campaign_id, c.customer_id, "clicked", opened_at, None))
                             event_id += 1
                     if rng.random() < config.CAMPAIGN_UNSUB_RATE:
                         t.campaign_events.append(
-                            (event_id, campaign_id, c.customer_id, "unsubscribed", sent_at, ""))
+                            (event_id, campaign_id, c.customer_id, "unsubscribed", sent_at, None))
                         event_id += 1
                         c.marketing_opt_in = False
                 campaign_id += 1
@@ -318,7 +318,7 @@ def run(customers: list[Customer], ref: Reference,
 
             # ----- basket ---------------------------------------------------
             channel = _weighted_choice(rng, channel_mix)
-            store_id = ""
+            store_id = None
             if channel == "store":
                 store_id = rng.choice(ref.stores_by_country[c.country_code])["store_id"]
 
@@ -475,20 +475,20 @@ def add_background_campaigns(t: Tables, customers: list[Customer],
 
         for c in audience:
             t.campaign_events.append(
-                (event_id, campaign_id, c.customer_id, "sent", sent_at, ""))
+                (event_id, campaign_id, c.customer_id, "sent", sent_at, None))
             event_id += 1
             if rng.random() >= config.DIGEST_DELIVERY_RATE:
                 continue
             t.campaign_events.append(
-                (event_id, campaign_id, c.customer_id, "delivered", sent_at, ""))
+                (event_id, campaign_id, c.customer_id, "delivered", sent_at, None))
             event_id += 1
             if rng.random() < config.DIGEST_OPEN_RATE:
                 t.campaign_events.append(
-                    (event_id, campaign_id, c.customer_id, "opened", sent_at, ""))
+                    (event_id, campaign_id, c.customer_id, "opened", sent_at, None))
                 event_id += 1
                 if rng.random() < config.DIGEST_CLICK_RATE:
                     t.campaign_events.append(
-                        (event_id, campaign_id, c.customer_id, "clicked", sent_at, ""))
+                        (event_id, campaign_id, c.customer_id, "clicked", sent_at, None))
                     event_id += 1
 
             for ordered_on, order_id in orders_by_customer.get(c.customer_id, ()):
