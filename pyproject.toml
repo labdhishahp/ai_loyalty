@@ -1,0 +1,21 @@
+[project]
+name = "lmart"
+version = "0.1.0"
+description = "L-Mart AI Loyalty Operations Employee"
+requires-python = ">=3.11"
+
+# Deliberately minimal. Only two runtime dependencies exist today:
+#   psycopg  - applying migrations and COPY-loading the seed data.
+#   dotenv   - reading DATABASE_URL from .env without exporting secrets by hand.
+# The seed generator itself uses only the standard library (random, csv, datetime)
+# so that data generation is reproducible without pinning a numeric stack.
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
