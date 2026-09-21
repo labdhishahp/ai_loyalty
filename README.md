@@ -25,6 +25,15 @@ behind each decision.
 
 ## Status
 
+**Milestone 1, slice 2 — the metrics layer.** Complete.
+
+- 11 named, versioned metric definitions with hand-written SQL
+- `CohortSpec`: point-in-time cohort resolution with a **required** `tier_as_of`
+- An engine that validates requests and assembles SQL, separated from execution
+  so the rules are testable with no database
+- 43 tests: 21 offline (cohort rules, SQL assembly), 22 against Postgres
+  reproducing every number in the answer key
+
 **Milestone 1, slice 1 — the data foundation.** Complete.
 
 - 12-table business schema for customers, loyalty, transactions, points and campaigns
@@ -57,8 +66,27 @@ python -m seed.load --reset   # generate in memory, COPY into Postgres
 python -m seed.verify         # integrity + planted signals, in SQL
 python -m seed.generate       # optional: build only, print counts, no database
 python -m seed.ablate         # ~60s: re-measure each cause's contribution
-pytest                        # row shapes and null handling, no database needed
+pytest                        # database tests skip automatically without .env
 ```
+
+## Asking the data a question
+
+```bash
+python -m metrics list
+
+# the headline, on the cohort as it stands in each period
+python -m metrics compare orders_per_member --country GB --tier GOLD --as-of period_end
+#   -> 1.615 -> 1.012  (-37.3%),  cohort 259 -> 241
+
+# the same question, cohort pinned before the February tier review
+python -m metrics compare orders_per_member --country GB --tier GOLD --as-of 2026-01-15
+#   -> 1.592 -> 1.333  (-16.2%),  cohort 266 -> 266
+```
+
+One parameter apart, twenty-one points apart. `tier_as_of` therefore has no
+default: asking for a tier without saying as-of-when raises an error rather than
+quietly picking a reading. That decision has to be made by whoever asks the
+question, has to be visible in the trace, and has to be markable by the eval.
 
 **Postgres is the source of truth.** The generator builds the dataset in memory
 and streams it straight into Supabase — there is no intermediate file, so there
@@ -93,5 +121,8 @@ seed/generate.py the in-memory pipeline (library + a no-database smoke test)
 seed/load.py     generate and COPY straight into Postgres
 seed/verify.py   integrity and signal checks, in SQL against the database
 seed/ablate.py   counterfactual attribution, in memory, for the answer key
+metrics/cohort.py   who is being measured (the tier_as_of decision lives here)
+metrics/catalog.py  the 11 metric definitions, each small enough to read
+metrics/engine.py   request validation and SQL assembly, separate from execution
 docs/            architecture and the answer key
 ```

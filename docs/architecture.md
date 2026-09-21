@@ -133,6 +133,20 @@ NULL handling went untested. Verifying in SQL also exercises the same joins,
 indexes and fan-out hazards the metrics layer is about to depend on, and enables
 integrity checks that flat files cannot express.
 
-Not yet built: metrics layer, tool registry, agent runtime, operations tables.
+**Milestone 1, slice 2 complete:** the metrics layer. 11 versioned metric
+definitions over hand-written SQL, with `CohortSpec` as its central abstraction.
+
+`CohortSpec` is where slice 1.1's finding became architecture. "Gold customers
+in the UK" is ambiguous, and in this data the ambiguity is worth ~21 percentage
+points, so `tier_as_of` is required rather than defaulted: a fixed date holds the
+cohort still, `"period_end"` re-resolves it per period. The model will have to
+choose, the choice lands in the trace, and the eval can mark it.
+
+The engine separates SQL assembly from execution, so the rules that matter are
+testable without a database. The metrics reproduce every number in the answer key
+via SQL written independently of `seed/verify.py` -- two implementations agreeing
+to the decimal, which is a real cross-check rather than a regression baseline.
+
+Not yet built: tool registry, agent runtime, operations tables.
 Operations tables are deliberately absent — no consumer exists yet, and they will
 land in the slice that uses them.

@@ -16,9 +16,9 @@ dependencies = [
 
 # Declared explicitly because the repo has two top-level directories and
 # setuptools refuses to guess between them. `db/` holds scripts run directly
-# (python db/migrate.py), not an importable package -- only `seed` is imported.
+# (python db/migrate.py), not an importable package.
 [tool.setuptools]
-packages = ["seed"]
+packages = ["seed", "metrics"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

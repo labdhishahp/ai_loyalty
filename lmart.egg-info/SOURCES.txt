@@ -5,6 +5,11 @@ lmart.egg-info/SOURCES.txt
 lmart.egg-info/dependency_links.txt
 lmart.egg-info/requires.txt
 lmart.egg-info/top_level.txt
+metrics/__init__.py
+metrics/__main__.py
+metrics/catalog.py
+metrics/cohort.py
+metrics/engine.py
 seed/__init__.py
 seed/ablate.py
 seed/config.py
@@ -14,3 +19,7 @@ seed/population.py
 seed/reference.py
 seed/simulate.py
 seed/verify.py
+tests/test_cohort.py
+tests/test_metric_sql.py
+tests/test_metric_values.py
+tests/test_row_shapes.py
