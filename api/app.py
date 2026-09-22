@@ -67,6 +67,10 @@ def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=8, max_length=2000)
+    # Opt-in per run. A run that only needs to investigate is never offered the
+    # write tool, so it structurally cannot propose anything rather than merely
+    # choosing not to.
+    allow_writes: bool = False
 
 
 class RunSummary(BaseModel):
@@ -101,7 +105,8 @@ def health() -> dict:
 def create_run(body: AskRequest, actor: str = Depends(require_api_key)) -> dict:
     with connection() as conn:
         try:
-            run_id = runtime.create_run(conn, body.question, actor=actor)
+            run_id = runtime.create_run(conn, body.question, actor=actor,
+                                        allow_writes=body.allow_writes)
         except runtime.AgentDisabled as exc:
             raise HTTPException(503, str(exc)) from exc
         return {"run_id": run_id, "status": "pending"}

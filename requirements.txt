@@ -1,0 +1,7 @@
+# Vercel's Python runtime installs from this file, not from pyproject.toml.
+# Kept in step with pyproject's dependencies plus what the API itself needs.
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+fastapi>=0.115
+anthropic>=0.40
+openai>=1.60

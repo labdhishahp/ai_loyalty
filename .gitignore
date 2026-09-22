@@ -2,6 +2,19 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
-.env
 .pytest_cache/
 .DS_Store
+*.egg-info/
+
+# Secrets. .env.local is the Next.js convention and holds BACKEND_API_KEY.
+.env
+.env.local
+.env*.local
+
+# Build output and dependencies
+web/node_modules/
+web/.next/
+web/out/
+node_modules/
+.vercel/
+web/tsconfig.tsbuildinfo
