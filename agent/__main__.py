@@ -16,6 +16,11 @@ from . import runtime
 
 
 def _print_step(run: dict) -> None:
+    # A run can reach a terminal state without recording a step -- a provider
+    # error on the very first turn, or a budget already exhausted. Printing
+    # "the last step" then crashes the CLI and hides the actual error.
+    if not run["steps"]:
+        return
     step = run["steps"][-1]
     calls = [c for c in run["tool_calls"] if c["step_no"] == step["step_no"]]
     print(f"\n── step {step['step_no']}  "

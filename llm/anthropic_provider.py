@@ -76,7 +76,7 @@ class AnthropicProvider:
         # its uncached price. Without this the token budget is spent on paying
         # for the same text over and over rather than on investigating.
         wire_tools = [{"name": t.name, "description": t.description,
-                       "input_schema": t.input_schema, "strict": True}
+                       "input_schema": t.input_schema, "strict": t.strict}
                       for t in tools]
         if wire_tools:
             wire_tools[-1]["cache_control"] = {"type": "ephemeral"}

@@ -114,6 +114,30 @@ class Tool:
     scopes: tuple[str, ...] = ("read",)
     timeout_seconds: float = 30.0
 
+    # Strict mode asks the provider to constrain generation to the schema, so
+    # arguments arrive guaranteed to validate. It is off by default here, and
+    # that is a deliberate decision rather than an oversight.
+    #
+    # The provider compiles every strict schema into a single grammar and
+    # refuses the request when it grows too large. With this tool set it does:
+    # first "The compiled grammar is too large", then, after thinning it,
+    # "Schemas contains too many optional parameters (26), which would make
+    # grammar compilation inefficient".
+    #
+    # The only ways to satisfy that are to carry fewer tools or to make optional
+    # parameters required. Both are worse than the thing strict buys. These
+    # tools are optional-heavy on purpose -- a caller should be able to ask for
+    # a metric without naming a country, a tier, a granularity and a filter --
+    # and forcing all of that to be supplied would make every call noisier to
+    # get the schema past a compiler.
+    #
+    # Nothing is actually lost. Pydantic validates every argument server-side
+    # regardless, which is the real guarantee; strict would only have saved a
+    # round trip when the model got one wrong. When it does, it receives a
+    # readable error naming the field and corrects itself -- a path the loop
+    # supports and the tests cover.
+    strict: bool = False
+
     def schema(self) -> dict:
         """JSON Schema for the model. Flat by convention: nested objects make
         provider-specific strict modes behave differently, and a tool that needs
@@ -154,7 +178,7 @@ class Registry:
         """Plain JSON Schema tool definitions, provider-neutral."""
         tools = self._tools.values() if include_writes else self.readable()
         return [{"name": t.name, "description": t.description,
-                 "input_schema": t.schema()}
+                 "input_schema": t.schema(), "strict": t.strict}
                 for t in sorted(tools, key=lambda t: t.name)]
 
     def dispatch(self, name: str, raw_input: dict, conn,
@@ -227,12 +251,12 @@ REGISTRY = Registry()
 
 def tool(name: str, description: str, input_model: type[BaseModel],
          mutates: bool = False, scopes: tuple[str, ...] = ("read",),
-         timeout_seconds: float = 30.0):
+         timeout_seconds: float = 30.0, strict: bool = False):
     """Decorator registering a handler as a tool."""
     def wrap(handler):
         REGISTRY.register(Tool(name=name, description=description,
                                input_model=input_model, handler=handler,
                                mutates=mutates, scopes=scopes,
-                               timeout_seconds=timeout_seconds))
+                               timeout_seconds=timeout_seconds, strict=strict))
         return handler
     return wrap

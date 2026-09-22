@@ -93,6 +93,10 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict
+    # Constrain generation to the schema. Off by default: the provider limits
+    # how large the combined grammar may be, and this tool set exceeds it.
+    # See tools/registry.py for the full reasoning.
+    strict: bool = False
 
 
 class LLMError(Exception):
