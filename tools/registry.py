@@ -40,6 +40,70 @@ from .envelope import ToolFailure, ToolResult, new_call_id
 log = logging.getLogger(__name__)
 
 
+# Validation keywords that providers' strict tool modes reject. Anthropic
+# returns 400 "For 'integer' type, properties maximum, minimum are not
+# supported"; other gateways vary. Pydantic still enforces every one of them
+# server-side, so removing them from the advertised schema loses no safety --
+# but it would lose INFORMATION, so each is folded into the description instead.
+# The model is then told the constraint in words and the validator still refuses
+# anything outside it.
+UNPORTABLE_KEYWORDS = {
+    "minimum": "at least {}", "maximum": "at most {}",
+    "exclusiveMinimum": "greater than {}", "exclusiveMaximum": "less than {}",
+    "minLength": "at least {} characters", "maxLength": "at most {} characters",
+    "minItems": "at least {} items", "maxItems": "at most {} items",
+    "pattern": "matching {}",
+}
+
+
+def _inline_refs(node, defs: dict):
+    """Replace every $ref with the definition it points at.
+
+    Pydantic factors nested models into $defs and references them with $ref.
+    That is valid JSON Schema, but provider strict modes vary in whether they
+    resolve it, and a schema that silently means something different on another
+    gateway is exactly what the provider boundary exists to prevent. Inlining
+    produces a self-contained schema that means the same thing everywhere.
+
+    Safe here because these models form a tree: a self-referencing model would
+    recurse forever, and would also be a sign the tool wants two tools.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            target = defs.get(ref.split("/")[-1], {})
+            merged = {**_inline_refs(target, defs),
+                      **{k: v for k, v in node.items() if k != "$ref"}}
+            return merged
+        return {k: _inline_refs(v, defs) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_inline_refs(v, defs) for v in node]
+    return node
+
+
+def _portable(prop: dict) -> None:
+    """Strip strict-mode-hostile keywords, preserving them as prose."""
+    prop.pop("title", None)
+    notes = [text.format(prop.pop(keyword))
+             for keyword, text in UNPORTABLE_KEYWORDS.items() if keyword in prop]
+    if notes:
+        existing = prop.get("description", "").rstrip()
+        prop["description"] = f"{existing} ({'; '.join(notes)})".strip()
+    for nested in prop.get("anyOf", []):
+        _portable(nested)
+    if isinstance(prop.get("items"), dict):
+        _strip_all(prop["items"])
+    for nested in prop.get("properties", {}).values():
+        _portable(nested)
+
+
+def _strip_all(schema: dict) -> None:
+    """Apply _portable to every property, at every depth."""
+    schema.pop("title", None)
+    for prop in schema.get("properties", {}).values():
+        _portable(prop)
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
@@ -55,9 +119,10 @@ class Tool:
         provider-specific strict modes behave differently, and a tool that needs
         a nested argument is usually two tools."""
         schema = self.input_model.model_json_schema()
+        schema = _inline_refs(schema, schema.get("$defs", {}))
+        schema.pop("$defs", None)
         schema.pop("title", None)
-        for prop in schema.get("properties", {}).values():
-            prop.pop("title", None)
+        _strip_all(schema)
         schema["additionalProperties"] = False
         schema.setdefault("required", [])
         return schema

@@ -21,11 +21,37 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 
 def new_call_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def json_safe(value: Any) -> Any:
+    """Convert database values into something both JSON and jsonb accept.
+
+    Postgres hands back Decimal for numeric and date/datetime for temporal
+    columns, and neither survives json.dumps. This is applied once, at the
+    boundary where a result leaves a tool, because it is needed twice over:
+    the result is persisted to jsonb for the trace AND serialised into the
+    conversation the model reads. Converting in each caller is how the two
+    quietly diverge.
+
+    Decimal becomes float deliberately: these values are already measurements,
+    and a string would force every consumer -- including the UI -- to parse it.
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -39,11 +65,13 @@ class ToolResult:
     ok: bool = True
 
     def for_model(self) -> dict:
-        return {"ok": True, "call_id": self.call_id, "summary": self.summary,
-                "data": self.data, "used": self.meta}
+        return json_safe({"ok": True, "call_id": self.call_id,
+                          "summary": self.summary, "data": self.data,
+                          "used": self.meta})
 
     def for_trace(self) -> dict:
-        return {**self.for_model(), "tool": self.tool, "internals": self.internals}
+        return {**self.for_model(), "tool": self.tool,
+                "internals": json_safe(self.internals)}
 
 
 @dataclass(frozen=True)

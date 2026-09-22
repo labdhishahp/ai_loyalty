@@ -11,8 +11,20 @@ from datetime import date
 
 import pytest
 
-import tools.catalog  # noqa: F401  -- registers the tools
+import agent.findings  # noqa: F401  -- registers submit_findings
+import tools.catalog   # noqa: F401  -- registers the read tools
 from tools.registry import REGISTRY
+
+# A valid payload for submit_findings, which unlike the read tools cannot be
+# called with no arguments.
+VALID_FINDINGS = {
+    "headline": "h", "verdict": "inconclusive", "metrics_used": ["x"],
+    "comparison_basis": "y", "cohort_basis": "z",
+    "causes": [{"name": "c", "explanation": "e", "evidence_call_ids": ["a"],
+                "importance": "minor", "confidence": "low"}],
+    "ruled_out": [{"name": "r", "why_not": "w", "evidence_call_ids": []}],
+    "limitations": "l", "recommended_next": "n",
+}
 
 FOCUS = {"period_start": date(2026, 6, 1), "period_end": date(2026, 9, 1)}
 
@@ -24,9 +36,10 @@ def test_every_tool_exposes_a_strict_flat_schema():
         schema = spec["input_schema"]
         assert schema["additionalProperties"] is False, spec["name"]
         assert schema["type"] == "object"
-        # Flat by convention: nested objects behave differently under each
-        # provider's strict mode, and a tool needing one is usually two tools.
-        assert "$defs" not in schema, f"{spec['name']} has a nested model"
+        # No $ref anywhere: provider strict modes differ in whether they
+        # resolve them, so the schema is inlined into a self-contained document.
+        assert "$defs" not in schema, f"{spec['name']} still has $defs"
+        assert "$ref" not in str(schema), f"{spec['name']} still has a $ref"
 
 
 def test_every_tool_description_is_substantial():
@@ -37,9 +50,12 @@ def test_every_tool_description_is_substantial():
 
 
 def test_the_write_partition_is_empty():
-    """Checkable fact, not a promise: nothing the model can call changes data."""
+    """Checkable fact, not a promise: nothing the model can call changes
+    business data. submit_findings ends a run; it writes no L-Mart records."""
     assert REGISTRY.writable() == []
-    assert len(REGISTRY.readable()) == 6
+    assert {t.name for t in REGISTRY.readable()} == {
+        "get_reference_data", "list_metrics", "get_metric", "list_campaigns",
+        "search_customers", "get_customer_360", "submit_findings"}
 
 
 def test_unknown_tool_is_a_failure_not_an_exception(db_conn):
@@ -161,5 +177,6 @@ def test_every_tool_runs_against_the_real_schema(db_conn, name):
                        "period_end": "2026-09-01"},
         "get_customer_360": {"customer_id": 1},
         "search_customers": {"limit": 1},
+        "submit_findings": VALID_FINDINGS,
     }.get(name, {})
     assert REGISTRY.dispatch(name, minimal, db_conn).ok

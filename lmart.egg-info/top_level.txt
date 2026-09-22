@@ -1,4 +1,6 @@
+agent
 core
+llm
 metrics
 seed
 tools
