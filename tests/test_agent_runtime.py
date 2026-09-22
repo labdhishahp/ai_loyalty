@@ -21,22 +21,10 @@ from agent.findings import SUBMIT_FINDINGS
 from llm import fake
 from llm.base import AssistantMessage, ToolResultsMessage, UserMessage
 
+from .conftest import SAMPLE_FINDINGS as FINDINGS
+
 QUESTION = "Why did engagement fall?"
 
-FINDINGS = {
-    "headline": "It fell because of one thing.",
-    "verdict": "confirmed",
-    "metrics_used": ["orders_per_member"],
-    "comparison_basis": "year over year",
-    "cohort_basis": "fixed at 2026-01-15",
-    "causes": [{"name": "A cause", "explanation": "Because.",
-                "evidence_call_ids": ["toolu_x"], "importance": "largest",
-                "confidence": "high"}],
-    "ruled_out": [{"name": "A red herring", "why_not": "Affects everyone.",
-                   "evidence_call_ids": []}],
-    "limitations": "None.",
-    "recommended_next": "Do the thing.",
-}
 
 
 @pytest.fixture

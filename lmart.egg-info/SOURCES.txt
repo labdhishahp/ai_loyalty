@@ -1,9 +1,13 @@
 README.md
 pyproject.toml
 agent/__init__.py
+agent/__main__.py
 agent/findings.py
 agent/prompt.py
 agent/runtime.py
+api/__init__.py
+api/app.py
+api/index.py
 core/__init__.py
 core/config.py
 core/db.py
@@ -12,6 +16,7 @@ llm/__init__.py
 llm/anthropic_provider.py
 llm/base.py
 llm/factory.py
+llm/fake.py
 llm/openai_compatible.py
 llm/pricing.py
 lmart.egg-info/PKG-INFO
@@ -33,6 +38,7 @@ seed/population.py
 seed/reference.py
 seed/simulate.py
 seed/verify.py
+tests/test_agent_runtime.py
 tests/test_cohort.py
 tests/test_config.py
 tests/test_db_urls.py

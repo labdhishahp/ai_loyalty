@@ -122,9 +122,13 @@ def load_run(conn, run_id: str) -> dict | None:
 
 
 def cancel(conn, run_id: str) -> None:
-    conn.execute("""update ops.agent_runs set status='cancelled', updated_at=now(),
-                    completed_at=now() where run_id=%s and status not in %s""",
-                 (run_id, TERMINAL))
+    # `status not in %s` does NOT work: psycopg renders a Python tuple as a
+    # composite value, so Postgres sees `status not in $2` and rejects it.
+    # `<> all(array)` is the parameterised form of "differs from every element".
+    conn.execute("""update ops.agent_runs
+                       set status='cancelled', updated_at=now(), completed_at=now()
+                     where run_id = %s and status <> all(%s)""",
+                 (run_id, list(TERMINAL)))
     conn.commit()
 
 
