@@ -28,3 +28,14 @@ def conn():
         # on the server's default.
         connection.execute("set time zone 'UTC'")
         yield connection
+
+
+@pytest.fixture
+def db_conn(conn):
+    """A connection that is rolled back after each test.
+
+    Tool dispatch sets `statement_timeout` with SET LOCAL and rolls back on
+    handler failure, so tests must not share transaction state.
+    """
+    yield conn
+    conn.rollback()

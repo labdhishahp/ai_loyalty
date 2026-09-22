@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from core.errors import ActionableError
+
 # Mirrors lmart.customers.country_code and lmart.loyalty_tiers.tier_code.
 # Held here so that a mistyped filter fails immediately with a clear message
 # rather than silently returning an empty cohort, which reads like "no data"
@@ -38,7 +40,7 @@ TIERS = ("BRONZE", "SILVER", "GOLD", "PLATINUM")
 PERIOD_END = "period_end"
 
 
-class CohortError(ValueError):
+class CohortError(ActionableError, ValueError):
     """The cohort could not be resolved as specified."""
 
 

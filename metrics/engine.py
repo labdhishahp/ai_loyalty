@@ -27,6 +27,8 @@ from typing import Any, Mapping
 
 from psycopg.rows import dict_row
 
+from core.errors import ActionableError
+
 from . import catalog
 from .cohort import CohortSpec, build_cohort_sql
 
@@ -40,7 +42,7 @@ GRANULARITIES = (TOTAL, MONTH)
 DAYS_PER_MONTH = 30.44
 
 
-class MetricRequestError(ValueError):
+class MetricRequestError(ActionableError, ValueError):
     """The request cannot be answered as specified."""
 
 

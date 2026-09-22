@@ -32,7 +32,9 @@ absence of waves after May 2026 is the signal, not a gap in the data.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+from core.errors import ActionableError
 
 
 @dataclass(frozen=True)
@@ -236,7 +238,7 @@ DEFINITIONS: tuple[MetricDefinition, ...] = (
 BY_NAME = {definition.name: definition for definition in DEFINITIONS}
 
 
-class UnknownMetric(KeyError):
+class UnknownMetric(ActionableError):
     """Asked for a metric that does not exist."""
 
 
