@@ -1,0 +1,22 @@
+{"question": "Why was the UK Gold Reactivation programme stopped?", "expect": ["fy27-marketing-budget-reallocation"]}
+{"question": "What is the maximum discount we can offer Gold members?", "expect": ["campaign-governance-policy"]}
+{"question": "How many marketing messages can one customer receive per week?", "expect": ["campaign-governance-policy"]}
+{"question": "How long do loyalty points last before expiring?", "expect": ["points-validity-policy-2026"]}
+{"question": "Did the points expiry change reduce how often members shop?", "expect": ["postmortem-points-expiry-communication"]}
+{"question": "Why do tier averages fall in February without anyone changing behaviour?", "expect": ["tier-review-policy", "guideline-cohort-analysis"]}
+{"question": "What happened to beauty product availability in Great Britain?", "expect": ["gb-beauty-supply-incident-2026"]}
+{"question": "Which customer segment buys the most beauty products in GB?", "expect": ["gb-beauty-supply-incident-2026", "postmortem-beauty-bundle-2025"]}
+{"question": "What offer should we use to win back lapsed high tier members?", "expect": ["playbook-lapsed-member-reactivation"]}
+{"question": "Should we discount when a category is out of stock?", "expect": ["playbook-category-disruption"]}
+{"question": "Is a high conversion rate proof that a campaign worked?", "expect": ["guideline-campaign-measurement", "postmortem-global-rewards-digest-2025"]}
+{"question": "How do we know if a decline is composition rather than behaviour?", "expect": ["guideline-cohort-analysis", "playbook-tier-retention"]}
+{"question": "Can we email customers in Britain who have not bought anything in two years?", "expect": ["gb-marketing-compliance"]}
+{"question": "What times of day can we send SMS in India?", "expect": ["in-marketing-compliance"]}
+{"question": "Do we need to check a do not call registry in Singapore?", "expect": ["ae-sg-marketing-compliance"]}
+{"question": "How many points does a Gold member earn per pound spent?", "expect": ["loyalty-programme-policy"]}
+{"question": "What spend qualifies a customer for Platinum?", "expect": ["loyalty-programme-policy"]}
+{"question": "Can we combine a points multiplier with a percentage discount?", "expect": ["campaign-governance-policy"]}
+{"question": "What is the largest audience a campaign may target without senior sign off?", "expect": ["campaign-governance-policy"]}
+{"question": "Did the UK Gold Reactivation campaign actually work when it was running?", "expect": ["postmortem-gb-gold-reactivation-2025"]}
+{"question": "Why did app usage jump in mid 2026 and does it explain segment differences?", "expect": ["app-relaunch-june-2026"]}
+{"question": "What should we check before submitting a campaign for approval?", "expect": ["playbook-campaign-proposal-checklist"]}

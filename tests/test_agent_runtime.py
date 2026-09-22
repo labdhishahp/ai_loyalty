@@ -245,5 +245,5 @@ def test_every_tool_is_offered_to_the_model(run_conn, scripted):
     runtime.run_to_completion(run_conn, run_id)
     offered = {t.name for t in provider.requests[0].tools}
     assert offered == {"get_reference_data", "list_metrics", "get_metric",
-                       "list_campaigns", "search_customers",
-                       "get_customer_360", SUBMIT_FINDINGS}
+                       "list_campaigns", "search_customers", "get_customer_360",
+                       "search_knowledge", SUBMIT_FINDINGS}

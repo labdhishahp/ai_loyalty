@@ -1,6 +1,7 @@
 agent
 api
 core
+knowledge
 llm
 metrics
 seed

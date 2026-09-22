@@ -12,6 +12,11 @@ core/__init__.py
 core/config.py
 core/db.py
 core/errors.py
+knowledge/__init__.py
+knowledge/build_corpus.py
+knowledge/embeddings.py
+knowledge/ingest.py
+knowledge/retrieval.py
 llm/__init__.py
 llm/anthropic_provider.py
 llm/base.py
@@ -39,6 +44,7 @@ seed/reference.py
 seed/simulate.py
 seed/verify.py
 tests/test_agent_runtime.py
+tests/test_api.py
 tests/test_cohort.py
 tests/test_config.py
 tests/test_db_urls.py
@@ -49,4 +55,5 @@ tests/test_tools.py
 tools/__init__.py
 tools/catalog.py
 tools/envelope.py
+tools/knowledge_tools.py
 tools/registry.py

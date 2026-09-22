@@ -43,6 +43,7 @@ from .prompt import SYSTEM_PROMPT
 
 import agent.findings          # noqa: F401  registers submit_findings
 import tools.catalog           # noqa: F401  registers the read tools
+import tools.knowledge_tools   # noqa: F401  registers search_knowledge
 
 TERMINAL = ("completed", "failed", "budget_exceeded", "cancelled")
 MAX_NUDGES = 1

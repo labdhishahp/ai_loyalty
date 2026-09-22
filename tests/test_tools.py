@@ -13,6 +13,7 @@ import pytest
 
 import agent.findings  # noqa: F401  -- registers submit_findings
 import tools.catalog   # noqa: F401  -- registers the read tools
+import tools.knowledge_tools  # noqa: F401  -- registers search_knowledge
 from tools.registry import REGISTRY
 
 # A valid payload for submit_findings, which unlike the read tools cannot be
@@ -55,7 +56,8 @@ def test_the_write_partition_is_empty():
     assert REGISTRY.writable() == []
     assert {t.name for t in REGISTRY.readable()} == {
         "get_reference_data", "list_metrics", "get_metric", "list_campaigns",
-        "search_customers", "get_customer_360", "submit_findings"}
+        "search_customers", "get_customer_360", "submit_findings",
+        "search_knowledge"}
 
 
 def test_unknown_tool_is_a_failure_not_an_exception(db_conn):
@@ -178,5 +180,6 @@ def test_every_tool_runs_against_the_real_schema(db_conn, name):
         "get_customer_360": {"customer_id": 1},
         "search_customers": {"limit": 1},
         "submit_findings": VALID_FINDINGS,
+        "search_knowledge": {"query": "discount ceiling for gold"},
     }.get(name, {})
     assert REGISTRY.dispatch(name, minimal, db_conn).ok
