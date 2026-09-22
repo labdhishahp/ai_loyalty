@@ -180,3 +180,126 @@ def _serialise(run: dict) -> dict:
         "steps": [_scalars(s) for s in run["steps"]],
         "tool_calls": [_scalars(c) for c in run["tool_calls"]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Proposals, approval and execution (Milestone 3 and 4)
+# ---------------------------------------------------------------------------
+# These endpoints are the human half of the system. The agent can create a
+# draft; only a person reaches anything below.
+
+from actions import approval as approval_actions       # noqa: E402
+from actions import proposals as proposal_actions      # noqa: E402
+
+
+class DecisionRequest(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ExecuteRequest(BaseModel):
+    # Supplied by the client so a retry after a timeout is provably the same
+    # request. Generated server-side it would be a new key every attempt, which
+    # is exactly the failure idempotency exists to prevent.
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+@app.get("/api/proposals")
+def list_proposals(limit: int = Query(25, ge=1, le=100),
+                   status: str | None = None,
+                   _: str = Depends(require_api_key)) -> dict:
+    from psycopg.rows import dict_row
+    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute("""
+            select proposal_id, run_id, status, name, programme, channel,
+                   offer_type, offer_value, audience_size, created_by,
+                   created_at, updated_at,
+                   (validation->>'ok')::boolean as valid
+            from ops.campaign_proposals
+            where (%s::text is null or status = %s)
+            order by created_at desc limit %s
+        """, (status, status, limit)).fetchall()
+    return {"proposals": [_scalars(r) for r in rows]}
+
+
+@app.get("/api/proposals/{proposal_id}")
+def get_proposal(proposal_id: str, _: str = Depends(require_api_key)) -> dict:
+    from psycopg.rows import dict_row
+    with connection() as conn:
+        try:
+            proposal = proposal_actions.load(conn, proposal_id)
+        except proposal_actions.ProposalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        with conn.cursor(row_factory=dict_row) as cur:
+            approvals = cur.execute(
+                "select * from ops.approvals where proposal_id=%s "
+                "order by created_at desc", (proposal_id,)).fetchall()
+            executions = cur.execute(
+                "select * from ops.campaign_executions where proposal_id=%s "
+                "order by started_at desc", (proposal_id,)).fetchall()
+    return {**_scalars(proposal),
+            "approvals": [_scalars(a) for a in approvals],
+            "executions": [_scalars(e) for e in executions]}
+
+
+@app.post("/api/proposals/{proposal_id}/revalidate")
+def revalidate_proposal(proposal_id: str,
+                        _: str = Depends(require_api_key)) -> dict:
+    """Re-run the checks against the world as it is now.
+
+    Exposed because the approval screen must not show a stale verdict: people
+    opt out and tiers change, and an approver deciding on yesterday's validation
+    is deciding on yesterday.
+    """
+    with connection() as conn:
+        try:
+            proposal, validation = proposal_actions.revalidate(conn, proposal_id)
+        except proposal_actions.ProposalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+    return {**_scalars(proposal), "validation": validation.to_dict()}
+
+
+@app.post("/api/proposals/{proposal_id}/decision")
+def decide_proposal(proposal_id: str, body: DecisionRequest,
+                    actor: str = Depends(require_api_key)) -> dict:
+    with connection() as conn:
+        try:
+            outcome = approval_actions.decide(
+                conn, proposal_id, decision=body.decision, actor=actor,
+                note=body.note)
+        except proposal_actions.ProposalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except approval_actions.ApprovalError as exc:
+            # 409: the request is well-formed, the state forbids it.
+            raise HTTPException(409, str(exc)) from exc
+    return {"approval_id": outcome["approval_id"],
+            "decision": outcome["decision"],
+            "proposal": _scalars(outcome["proposal"])}
+
+
+@app.post("/api/proposals/{proposal_id}/execute")
+def execute_proposal(proposal_id: str, body: ExecuteRequest,
+                     actor: str = Depends(require_api_key)) -> dict:
+    with connection() as conn:
+        try:
+            return approval_actions.execute(
+                conn, proposal_id, idempotency_key=body.idempotency_key,
+                actor=actor)
+        except proposal_actions.ProposalError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except approval_actions.ApprovalError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/audit")
+def audit_log(limit: int = Query(50, ge=1, le=200),
+              subject_id: str | None = None,
+              _: str = Depends(require_api_key)) -> dict:
+    from psycopg.rows import dict_row
+    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute("""
+            select * from ops.audit_log
+            where (%s::text is null or subject_id = %s)
+            order by occurred_at desc limit %s
+        """, (subject_id, subject_id, limit)).fetchall()
+    return {"entries": [_scalars(r) for r in rows]}

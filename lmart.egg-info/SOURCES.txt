@@ -1,5 +1,10 @@
 README.md
 pyproject.toml
+actions/__init__.py
+actions/audience.py
+actions/policy_engine.py
+actions/proposals.py
+actions/rules.py
 agent/__init__.py
 agent/__main__.py
 agent/findings.py
@@ -53,6 +58,7 @@ tests/test_metric_values.py
 tests/test_row_shapes.py
 tests/test_tools.py
 tools/__init__.py
+tools/action_tools.py
 tools/catalog.py
 tools/envelope.py
 tools/knowledge_tools.py

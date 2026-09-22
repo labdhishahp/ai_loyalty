@@ -244,6 +244,16 @@ def test_every_tool_is_offered_to_the_model(run_conn, scripted):
     run_id = runtime.create_run(run_conn, QUESTION)
     runtime.run_to_completion(run_conn, run_id)
     offered = {t.name for t in provider.requests[0].tools}
+    # Read-only by default: the write tool is not in the list at all. A model
+    # cannot misuse a capability it was never shown.
     assert offered == {"get_reference_data", "list_metrics", "get_metric",
                        "list_campaigns", "search_customers", "get_customer_360",
-                       "search_knowledge", SUBMIT_FINDINGS}
+                       "search_knowledge", "preview_campaign", SUBMIT_FINDINGS}
+
+
+def test_a_run_with_writes_enabled_is_offered_the_proposal_tool(
+        run_conn, scripted):
+    provider = scripted(fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)))
+    run_id = runtime.create_run(run_conn, QUESTION, allow_writes=True)
+    runtime.run_to_completion(run_conn, run_id)
+    assert "create_campaign_proposal" in {t.name for t in provider.requests[0].tools}

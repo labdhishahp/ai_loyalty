@@ -44,6 +44,7 @@ from .prompt import SYSTEM_PROMPT
 import agent.findings          # noqa: F401  registers submit_findings
 import tools.catalog           # noqa: F401  registers the read tools
 import tools.knowledge_tools   # noqa: F401  registers search_knowledge
+import tools.action_tools      # noqa: F401  registers the write tools
 
 TERMINAL = ("completed", "failed", "budget_exceeded", "cancelled")
 MAX_NUDGES = 1
@@ -91,7 +92,8 @@ def _require_enabled() -> None:
 # --------------------------------------------------------------------------
 
 def create_run(conn, question: str, actor: str = "anonymous",
-               provider_name: str | None = None) -> str:
+               provider_name: str | None = None,
+               allow_writes: bool = False) -> str:
     _require_enabled()
     provider = factory.create(provider_name)
     budgets = Budgets.from_config()
@@ -99,10 +101,11 @@ def create_run(conn, question: str, actor: str = "anonymous",
     conn.execute("""
         insert into ops.agent_runs
             (run_id, question, status, provider, model,
-             max_steps, max_tokens, max_cost_usd, actor)
-        values (%s, %s, 'pending', %s, %s, %s, %s, %s, %s)
+             max_steps, max_tokens, max_cost_usd, actor, allow_writes)
+        values (%s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)
     """, (run_id, question, provider.name, provider.model,
-          budgets.max_steps, budgets.max_tokens, budgets.max_cost_usd, actor))
+          budgets.max_steps, budgets.max_tokens, budgets.max_cost_usd, actor,
+          allow_writes))
     conn.commit()
     return run_id
 
@@ -174,8 +177,11 @@ def _rebuild(run: dict) -> list[Message]:
     return messages
 
 
-def _tool_specs() -> list[ToolSpec]:
-    return [ToolSpec(**spec) for spec in REGISTRY.schemas()]
+def _tool_specs(allow_writes: bool) -> list[ToolSpec]:
+    """Write tools are not merely refused when a run is read-only -- they are
+    not offered. A model cannot misuse a capability it was never shown, and the
+    trace then makes plain which runs could write at all."""
+    return [ToolSpec(**spec) for spec in REGISTRY.schemas(include_writes=allow_writes)]
 
 
 # --------------------------------------------------------------------------
@@ -249,8 +255,9 @@ def advance(conn, run_id: str) -> dict:
     provider = factory.create(run["provider"])
     started = time.time()
     try:
-        completion = provider.complete(system=SYSTEM_PROMPT, messages=messages,
-                                       tools=_tool_specs(), max_tokens=16000)
+        completion = provider.complete(
+            system=SYSTEM_PROMPT, messages=messages,
+            tools=_tool_specs(run["allow_writes"]), max_tokens=16000)
     except LLMError as exc:
         _finish(conn, run_id, "failed", str(exc))
         return load_run(conn, run_id)
@@ -311,7 +318,7 @@ def advance(conn, run_id: str) -> dict:
 
         call_started = time.time()
         outcome = REGISTRY.dispatch(call.name, call.arguments, conn,
-                                    allow_writes=False)
+                                    allow_writes=run["allow_writes"])
         elapsed = int((time.time() - call_started) * 1000)
 
         # The call_id in the trace must be the PROVIDER's id: that is what the

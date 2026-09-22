@@ -13,6 +13,7 @@ import pytest
 
 import agent.findings  # noqa: F401  -- registers submit_findings
 import tools.catalog   # noqa: F401  -- registers the read tools
+import tools.action_tools     # noqa: F401  -- registers the write tools
 import tools.knowledge_tools  # noqa: F401  -- registers search_knowledge
 from tools.registry import REGISTRY
 
@@ -50,14 +51,27 @@ def test_every_tool_description_is_substantial():
         assert len(spec["description"]) > 120, spec["name"]
 
 
-def test_the_write_partition_is_empty():
-    """Checkable fact, not a promise: nothing the model can call changes
-    business data. submit_findings ends a run; it writes no L-Mart records."""
-    assert REGISTRY.writable() == []
+def test_the_write_partition_holds_exactly_one_tool():
+    """The model's entire write capability, as a checkable fact.
+
+    It can record a draft proposal. It cannot approve, execute, or touch any
+    L-Mart business table. submit_findings and preview_campaign are reads:
+    one ends a run, the other validates a hypothetical without storing it.
+    """
+    assert {t.name for t in REGISTRY.writable()} == {"create_campaign_proposal"}
     assert {t.name for t in REGISTRY.readable()} == {
         "get_reference_data", "list_metrics", "get_metric", "list_campaigns",
         "search_customers", "get_customer_360", "submit_findings",
-        "search_knowledge"}
+        "search_knowledge", "preview_campaign"}
+
+
+def test_a_write_tool_is_refused_when_the_run_is_read_only(db_conn):
+    """Defence in depth: a read-only run does not offer write tools at all, and
+    dispatch refuses them even if one were somehow requested."""
+    failure = REGISTRY.dispatch("create_campaign_proposal", {}, db_conn,
+                                allow_writes=False)
+    assert failure.ok is False
+    assert failure.error == "not_permitted"
 
 
 def test_unknown_tool_is_a_failure_not_an_exception(db_conn):
@@ -181,5 +195,10 @@ def test_every_tool_runs_against_the_real_schema(db_conn, name):
         "search_customers": {"limit": 1},
         "submit_findings": VALID_FINDINGS,
         "search_knowledge": {"query": "discount ceiling for gold"},
+        "preview_campaign": {"channel": "email",
+                             "offer_type": "points_multiplier",
+                             "offer_value": 2.0, "countries": ["GB"],
+                             "tiers": ["GOLD"], "tier_as_of": "2026-01-15",
+                             "holdout_pct": 10},
     }.get(name, {})
     assert REGISTRY.dispatch(name, minimal, db_conn).ok

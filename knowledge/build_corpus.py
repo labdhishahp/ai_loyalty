@@ -21,15 +21,12 @@ import textwrap
 
 CORPUS = pathlib.Path(__file__).parent / "corpus"
 
-# Discount ceilings by tier. The single source of truth for both the policy
-# prose below and actions/policy_engine.py.
-DISCOUNT_CEILING_PCT = {"BRONZE": 10, "SILVER": 12, "GOLD": 15, "PLATINUM": 20}
-POINTS_MULTIPLIER_CEILING = 3.0
-CONTACT_CAP_PER_WEEK = 2
-MIN_AUDIENCE = 50
-MAX_AUDIENCE = 50_000
-SENIOR_APPROVAL_ABOVE = 10_000
-DORMANCY_MONTHS_GB = 24
+# Imported, never restated. actions/rules.py is the single source of truth for
+# every number below; the prose here documents what the validator enforces, so
+# the two cannot disagree.
+from actions.rules import (CONTACT_CAP_PER_WEEK, DISCOUNT_CEILING_PCT,
+                           DORMANCY_MONTHS_GB, MAX_AUDIENCE, MIN_AUDIENCE,
+                           POINTS_MULTIPLIER_CEILING, SENIOR_APPROVAL_ABOVE)
 
 DOCS: list[dict] = [
 
