@@ -142,12 +142,22 @@ def select_tier_review_promotions(customers: list[Customer]) -> set[int]:
     before the simulation runs, which avoids a two-pass generate/measure/regenerate
     cycle for no analytical gain.
 
+    Only accounts enrolled by the review date are eligible -- see below.
+
     Deterministic: sorted by base_rate then customer_id, so ties never depend on
     dict or set iteration order.
     """
     eligible = [
         c for c in customers
-        if c.country_code == "GB" and c.initial_tier == "GOLD" and c.account_id is not None
+        if c.country_code == "GB" and c.initial_tier == "GOLD"
+        and c.account_id is not None
+        # A review cannot promote someone who has not joined yet. Without this,
+        # an account enrolling in August 2026 was still promoted in the February
+        # review, and simulate.py closed its enrolment span on the review date
+        # -- producing a span that ends six months before it starts. Six such
+        # rows existed; point-in-time queries simply never matched them, so the
+        # members vanished from every cohort instead of erroring.
+        and c.enrolled_on <= config.TIER_REVIEW_DATE
     ]
     eligible.sort(key=lambda c: (-c.base_rate, c.customer_id))
     n = int(len(eligible) * config.TIER_REVIEW_PROMOTE_FRACTION)

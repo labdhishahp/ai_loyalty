@@ -96,6 +96,22 @@ INTEGRITY = [
             from lmart.tier_history group by account_id
         ) per_account where open_rows <> 1
     """),
+    # An overlap check does not catch an INVERTED span: a row ending before it
+    # starts overlaps nothing. The consequence is silent -- the point-in-time
+    # join requires effective_from <= as_of < effective_to, which an inverted
+    # span can never satisfy, so those members disappear from every cohort
+    # rather than being double counted. A zero-length span is caught by the same
+    # rule, since a tier held for no time is not a tier anyone held.
+    ("Every tier_history span ends after it starts", """
+        select count(*) from lmart.tier_history
+        where effective_to is not null and effective_to <= effective_from
+    """),
+    ("No tier span starts before its account was enrolled", """
+        select count(*)
+        from lmart.tier_history th
+        join lmart.loyalty_accounts la on la.account_id = th.account_id
+        where th.effective_from < la.enrolled_on
+    """),
     ("No account has overlapping tier_history spans", """
         select count(*)
         from lmart.tier_history a
