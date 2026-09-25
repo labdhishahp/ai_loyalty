@@ -1,4 +1,14 @@
-"""What a good answer to the headline question contains.
+"""What a good answer to a given question contains.
+
+CRITERIA BELONG TO A QUESTION. An earlier version exposed one flat CRITERIA
+tuple and the grader applied it to every completed run, so a run that asked
+something else entirely was marked down for not mentioning causes it was never
+asked about. That produces a number that looks like a score and measures
+nothing -- and it makes "we have no rubric for this question" indistinguishable
+from "this answer was poor", which are different facts about the system.
+
+A run whose question matches no gold question is therefore reported UNSCORED
+rather than scored badly.
 
 Derived from docs/planted-truths.md, whose numbers were MEASURED by
 seed/ablate.py rather than asserted. Each criterion is one thing a competent
@@ -29,6 +39,30 @@ class Criterion:
     check: Callable[[dict], bool]
 
 
+@dataclass(frozen=True)
+class GoldQuestion:
+    """A question we can mark, and the rubric for marking it."""
+
+    key: str
+    question: str
+    # Each inner tuple is a group of alternatives; EVERY group must appear in
+    # the run's question for it to match. Explicit rather than fuzzy, because a
+    # matcher that silently mis-identifies a question produces a confidently
+    # wrong score -- the exact failure this whole change exists to remove. It
+    # is also testable, which a similarity threshold is not.
+    identifies: tuple[tuple[str, ...], ...]
+    criteria: tuple[Criterion, ...]
+
+    @property
+    def total_weight(self) -> int:
+        return sum(c.weight for c in self.criteria)
+
+    def matches(self, question: str) -> bool:
+        text = " ".join(question.lower().split())
+        return all(any(phrase in text for phrase in group)
+                   for group in self.identifies)
+
+
 def _text(*values) -> str:
     return " ".join(str(v) for v in values).lower()
 
@@ -45,7 +79,8 @@ def _any(haystack: str, *needles: str) -> bool:
     return any(n in haystack for n in needles)
 
 
-CRITERIA: tuple[Criterion, ...] = (
+# The criteria themselves are unchanged; they now have an owner.
+HEADLINE_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "decline_is_real", "Confirms the decline rather than disputing it", 1,
         lambda a: a["verdict"] in ("confirmed", "partly_confirmed")),
@@ -112,4 +147,31 @@ CRITERIA: tuple[Criterion, ...] = (
         lambda a: len(a.get("limitations", "")) > 40),
 )
 
-TOTAL_WEIGHT = sum(c.weight for c in CRITERIA)
+HEADLINE = GoldQuestion(
+    key="gb_gold_engagement_decline",
+    question=("Why has engagement among Gold customers in the UK dropped over "
+              "the last three months?"),
+    # "gold" alone is not enough -- a question about proposing a campaign to
+    # lapsed GB Gold members contains it too, and that question has a different
+    # right answer. Requiring the subject (engagement), the direction (a fall)
+    # and the interrogative keeps the two apart.
+    identifies=(
+        ("why",),
+        ("engagement",),
+        ("gold",),
+        ("drop", "fell", "fall", "declin", "down"),
+    ),
+    criteria=HEADLINE_CRITERIA,
+)
+
+GOLD_QUESTIONS: tuple[GoldQuestion, ...] = (HEADLINE,)
+
+
+def match(question: str) -> GoldQuestion | None:
+    """The gold question a run asked, or None if we have no rubric for it."""
+    return next((g for g in GOLD_QUESTIONS if g.matches(question)), None)
+
+
+# Kept for callers that only care about the headline rubric.
+CRITERIA = HEADLINE_CRITERIA
+TOTAL_WEIGHT = HEADLINE.total_weight

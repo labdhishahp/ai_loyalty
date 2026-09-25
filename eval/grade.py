@@ -15,13 +15,19 @@ from psycopg.rows import dict_row
 
 from core import db
 
-from .answer_key import CRITERIA, TOTAL_WEIGHT
+from .answer_key import GoldQuestion, match
 
 
-def grade(answer: dict) -> tuple[int, list[tuple]]:
+def grade(answer: dict, gold: GoldQuestion) -> tuple[int, list[tuple]]:
+    """Score an answer against the rubric for the question it was asked.
+
+    The gold question is a required argument rather than a module-level
+    default: passing it explicitly is what makes it impossible to score an
+    answer against criteria belonging to a different question.
+    """
     results = []
     earned = 0
-    for criterion in CRITERIA:
+    for criterion in gold.criteria:
         try:
             passed = bool(criterion.check(answer))
         except Exception:                                   # noqa: BLE001
@@ -47,17 +53,35 @@ def main() -> int:
         print("No completed runs with findings to grade.", file=sys.stderr)
         return 1
 
+    scored = unscored = 0
     for run in runs:
-        earned, results = grade(run["final_answer"])
-        pct = earned / TOTAL_WEIGHT * 100
         print(f"\n{'=' * 74}")
         print(f"{str(run['run_id'])[:8]}  {run['provider']}/{run['model']}  "
               f"{run['steps_used']} steps  ${float(run['cost_usd']):.3f}")
         print(f"{run['question']}")
-        print(f"\n  SCORE {earned}/{TOTAL_WEIGHT}  ({pct:.0f}%)\n")
+
+        gold = match(run["question"])
+        if gold is None:
+            # Not a failure of the answer -- a gap in the rubric. Reporting it
+            # as a low score would conflate "we cannot mark this" with "this was
+            # poor", and the second is a claim about the agent that the first
+            # does not support.
+            unscored += 1
+            print("\n  UNSCORED — no gold question matches this. Add one to "
+                  "eval/answer_key.py to mark answers like it.")
+            continue
+
+        scored += 1
+        earned, results = grade(run["final_answer"], gold)
+        pct = earned / gold.total_weight * 100
+        print(f"\n  rubric: {gold.key}")
+        print(f"  SCORE {earned}/{gold.total_weight}  ({pct:.0f}%)\n")
         for criterion, passed in results:
             print(f"    {'PASS' if passed else 'MISS'}  [{criterion.weight}] "
                   f"{criterion.description}")
+
+    print(f"\n{'=' * 74}")
+    print(f"{scored} run(s) scored, {unscored} unscored for want of a rubric.")
     return 0
 
 
