@@ -28,6 +28,8 @@ from pydantic import BaseModel, Field
 
 from agent import runtime
 from core import config, db
+from core.auth import (APPROVE, EXECUTE, PROPOSE, READ, SERVICE_PRINCIPAL,
+                       AuthError, Principal, principal_from_token)
 from core.errors import ActionableError
 
 logging.basicConfig(level=logging.INFO)
@@ -53,16 +55,50 @@ def connection():
         yield conn
 
 
-def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> str:
+def require_principal(
+    authorization: Annotated[str | None, Header()] = None,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> Principal:
+    """Identify the caller. Two accepted credentials, deliberately unequal.
+
+    A Supabase bearer token identifies a PERSON, whose authority comes from
+    ops.user_roles. The shared key identifies a SERVICE -- CI, the MCP server --
+    and is weaker than any person: read and propose only. A campaign that
+    reaches real customers requires a named human, and a shared secret names
+    nobody.
+
+    A bearer token is preferred when both are present, so a signed-in browser is
+    never silently downgraded to the service identity.
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        with connection() as conn:
+            try:
+                return principal_from_token(conn, token)
+            except AuthError as exc:
+                raise HTTPException(401, str(exc)) from exc
+
     expected = config.app_api_key()
     if expected is None:
         if IS_SERVERLESS:
             # Deployed and unprotected is not a state worth tolerating quietly.
             raise HTTPException(500, "APP_API_KEY is not configured.")
-        return "local"
-    if x_api_key != expected:
-        raise HTTPException(401, "Invalid or missing X-API-Key.")
-    return "operator"
+        return SERVICE_PRINCIPAL
+    if x_api_key and x_api_key == expected:
+        return SERVICE_PRINCIPAL
+    raise HTTPException(401, "Sign in, or present a valid X-API-Key.")
+
+
+def requires(scope: str):
+    """Dependency factory: refuse the request unless the caller holds `scope`."""
+    def dependency(principal: Principal = Depends(require_principal)) -> Principal:
+        try:
+            principal.require(scope)
+        except AuthError as exc:
+            # 403, not 401: we know who you are, you simply may not do this.
+            raise HTTPException(403, str(exc)) from exc
+        return principal
+    return dependency
 
 
 class AskRequest(BaseModel):
@@ -98,22 +134,42 @@ def health() -> dict:
         "coe_gateway_configured": factory.coe_is_configured(),
         "agent_enabled": config.get_bool("AGENT_ENABLED", True),
         "auth_required": config.app_api_key() is not None,
+        "supabase_url": config.get("SUPABASE_URL"),
     }
 
 
+@app.get("/api/me")
+def me(principal: Principal = Depends(require_principal)) -> dict:
+    """Who the caller is and what they may do.
+
+    The UI needs this to decide what to render. Hiding a button is a courtesy,
+    not a control -- every scope is enforced again server-side -- but showing an
+    approver's buttons to an analyst who will only be refused is a bad interface.
+    """
+    return {"actor": principal.actor, "role": principal.role,
+            "scopes": sorted(principal.scopes)}
+
+
 @app.post("/api/runs", status_code=201)
-def create_run(body: AskRequest, actor: str = Depends(require_api_key)) -> dict:
+def create_run(body: AskRequest,
+               principal: Principal = Depends(require_principal)) -> dict:
     with connection() as conn:
         try:
-            run_id = runtime.create_run(conn, body.question, actor=actor,
-                                        allow_writes=body.allow_writes)
+            # A run may only be granted permissions its creator already holds.
+            if body.allow_writes:
+                principal.require(PROPOSE)
+            run_id = runtime.create_run(
+                conn, body.question, actor=principal.actor,
+                allow_writes=body.allow_writes, scopes=principal.scopes)
         except runtime.AgentDisabled as exc:
             raise HTTPException(503, str(exc)) from exc
+        except AuthError as exc:
+            raise HTTPException(403, str(exc)) from exc
         return {"run_id": run_id, "status": "pending"}
 
 
 @app.post("/api/runs/{run_id}/advance")
-def advance(run_id: str, _: str = Depends(require_api_key)) -> dict:
+def advance(run_id: str, _: Principal = Depends(require_principal)) -> dict:
     with connection() as conn:
         try:
             run = runtime.advance(conn, run_id)
@@ -125,7 +181,7 @@ def advance(run_id: str, _: str = Depends(require_api_key)) -> dict:
 
 
 @app.get("/api/runs/{run_id}")
-def get_run(run_id: str, _: str = Depends(require_api_key)) -> dict:
+def get_run(run_id: str, _: Principal = Depends(require_principal)) -> dict:
     with connection() as conn:
         run = runtime.load_run(conn, run_id)
         if run is None:
@@ -134,7 +190,7 @@ def get_run(run_id: str, _: str = Depends(require_api_key)) -> dict:
 
 
 @app.post("/api/runs/{run_id}/cancel")
-def cancel_run(run_id: str, _: str = Depends(require_api_key)) -> dict:
+def cancel_run(run_id: str, _: Principal = Depends(require_principal)) -> dict:
     with connection() as conn:
         runtime.cancel(conn, run_id)
         run = runtime.load_run(conn, run_id)
@@ -145,7 +201,7 @@ def cancel_run(run_id: str, _: str = Depends(require_api_key)) -> dict:
 
 @app.get("/api/runs")
 def list_runs(limit: int = Query(25, ge=1, le=100),
-              _: str = Depends(require_api_key)) -> dict:
+              _: Principal = Depends(require_principal)) -> dict:
     from psycopg.rows import dict_row
     with connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -212,7 +268,7 @@ class ExecuteRequest(BaseModel):
 @app.get("/api/proposals")
 def list_proposals(limit: int = Query(25, ge=1, le=100),
                    status: str | None = None,
-                   _: str = Depends(require_api_key)) -> dict:
+                   _: Principal = Depends(require_principal)) -> dict:
     from psycopg.rows import dict_row
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         rows = cur.execute("""
@@ -228,7 +284,8 @@ def list_proposals(limit: int = Query(25, ge=1, le=100),
 
 
 @app.get("/api/proposals/{proposal_id}")
-def get_proposal(proposal_id: str, _: str = Depends(require_api_key)) -> dict:
+def get_proposal(proposal_id: str,
+                 _: Principal = Depends(require_principal)) -> dict:
     from psycopg.rows import dict_row
     with connection() as conn:
         try:
@@ -249,7 +306,7 @@ def get_proposal(proposal_id: str, _: str = Depends(require_api_key)) -> dict:
 
 @app.post("/api/proposals/{proposal_id}/revalidate")
 def revalidate_proposal(proposal_id: str,
-                        _: str = Depends(require_api_key)) -> dict:
+                        _: Principal = Depends(require_principal)) -> dict:
     """Re-run the checks against the world as it is now.
 
     Exposed because the approval screen must not show a stale verdict: people
@@ -266,11 +323,11 @@ def revalidate_proposal(proposal_id: str,
 
 @app.post("/api/proposals/{proposal_id}/decision")
 def decide_proposal(proposal_id: str, body: DecisionRequest,
-                    actor: str = Depends(require_api_key)) -> dict:
+                    principal: Principal = Depends(requires(APPROVE))) -> dict:
     with connection() as conn:
         try:
             outcome = approval_actions.decide(
-                conn, proposal_id, decision=body.decision, actor=actor,
+                conn, proposal_id, decision=body.decision, actor=principal.actor,
                 note=body.note)
         except proposal_actions.ProposalError as exc:
             raise HTTPException(404, str(exc)) from exc
@@ -284,12 +341,12 @@ def decide_proposal(proposal_id: str, body: DecisionRequest,
 
 @app.post("/api/proposals/{proposal_id}/execute")
 def execute_proposal(proposal_id: str, body: ExecuteRequest,
-                     actor: str = Depends(require_api_key)) -> dict:
+                     principal: Principal = Depends(requires(EXECUTE))) -> dict:
     with connection() as conn:
         try:
             return approval_actions.execute(
                 conn, proposal_id, idempotency_key=body.idempotency_key,
-                actor=actor)
+                actor=principal.actor)
         except proposal_actions.ProposalError as exc:
             raise HTTPException(404, str(exc)) from exc
         except approval_actions.ApprovalError as exc:
@@ -299,7 +356,7 @@ def execute_proposal(proposal_id: str, body: ExecuteRequest,
 @app.get("/api/audit")
 def audit_log(limit: int = Query(50, ge=1, le=200),
               subject_id: str | None = None,
-              _: str = Depends(require_api_key)) -> dict:
+              _: Principal = Depends(require_principal)) -> dict:
     from psycopg.rows import dict_row
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         rows = cur.execute("""

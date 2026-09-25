@@ -202,3 +202,34 @@ def test_every_tool_runs_against_the_real_schema(tool_ctx, name):
                              "holdout_pct": 10},
     }.get(name, {})
     assert REGISTRY.dispatch(name, minimal, tool_ctx).ok
+
+
+# --------------------------------------------------- caller permissions
+
+def test_a_tool_is_refused_when_the_caller_lacks_its_scope(db_conn):
+    """The run may permit writes and the caller still may not.
+
+    Two independent gates: allow_writes is a property of the RUN, scopes are a
+    property of the CALLER. Collapsing them would make "this run may write" and
+    "this person may write" the same statement, and they are not.
+    """
+    from core.auth import READ
+    read_only_caller = ToolContext(conn=db_conn, actor="viewer@example.com",
+                                   allow_writes=True,          # run permits it
+                                   scopes=frozenset({READ}))   # caller does not
+    failure = REGISTRY.dispatch("create_campaign_proposal", {}, read_only_caller)
+    assert failure.ok is False
+    assert failure.error == "not_permitted"
+    assert "propose" in failure.message
+    assert "viewer@example.com" in failure.message
+
+
+def test_a_caller_with_the_scope_gets_past_the_permission_check(db_conn):
+    """Reaches validation instead of being refused -- proving the gate opened,
+    without creating anything."""
+    from core.auth import PROPOSE, READ
+    proposer = ToolContext(conn=db_conn, actor="analyst@example.com",
+                           allow_writes=True,
+                           scopes=frozenset({READ, PROPOSE}))
+    failure = REGISTRY.dispatch("create_campaign_proposal", {}, proposer)
+    assert failure.error == "validation"        # not 'not_permitted'

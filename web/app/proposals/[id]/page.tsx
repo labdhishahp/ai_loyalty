@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
 import { api, ApiError, Proposal } from "@/lib/api";
 import { Failed, Loading, Status } from "@/components/states";
+import { useSession } from "@/components/Session";
 
 /**
  * The approval screen.
@@ -19,6 +20,7 @@ import { Failed, Loading, Status } from "@/components/states";
  */
 export default function ProposalPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { me, can } = useSession();
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -62,8 +64,16 @@ export default function ProposalPage({ params }: { params: Promise<{ id: string 
   if (!proposal) return <div style={{ marginTop: 28 }}><Loading what="the proposal" /></div>;
 
   const validation = proposal.validation;
-  const canDecide = proposal.status === "draft";
-  const canExecute = proposal.status === "approved";
+  // Two conditions, and both must hold: the proposal must be at the right
+  // stage, AND the caller must hold the permission. The server checks the
+  // second again on every request -- hiding a button is a courtesy, not a
+  // control -- but showing an approver's buttons to an analyst who will only be
+  // refused is a bad interface.
+  const canDecide = proposal.status === "draft" && can("approve");
+  const canExecute = proposal.status === "approved" && can("execute");
+  const blockedByRole =
+    (proposal.status === "draft" && !can("approve")) ||
+    (proposal.status === "approved" && !can("execute"));
 
   return (
     <>
@@ -179,6 +189,18 @@ export default function ProposalPage({ params }: { params: Promise<{ id: string 
       )}
 
       {actionError && <Failed error={actionError} />}
+
+      {blockedByRole && (
+        <div className="card tight">
+          <div className="row" style={{ gap: 8 }}>
+            <span className="pill warn">approval requires the approver role</span>
+            <span className="meta">
+              Signed in as {me?.actor ?? "service"} ({me?.role ?? "service"}).
+              {me?.role === "service" && " Sign in to approve."}
+            </span>
+          </div>
+        </div>
+      )}
 
       {(canDecide || canExecute) && (
         <div className="card">

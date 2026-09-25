@@ -19,6 +19,7 @@ SENT, which is the half of the contract a live call cannot check at all.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 from .base import Completion, Message, ToolCall, ToolSpec, Usage
@@ -66,5 +67,17 @@ def calls(*tool_calls: ToolCall, text: str | None = None,
 
 
 def call(tool: str, arguments: dict, call_id: str | None = None) -> ToolCall:
-    return ToolCall(id=call_id or f"toolu_{tool}_{abs(hash(str(arguments))) % 10**8}",
+    """Build a tool call. The id is UNIQUE unless one is given explicitly.
+
+    It used to be derived from hash(arguments), which is stable within a
+    process: two tests both calling list_metrics({}) produced the same id, and
+    ops.tool_calls.call_id is a primary key. That collided only when rows from an
+    earlier test survived cleanup, so it lay dormant until a change to the
+    cleanup filter exposed it -- the worst kind of test bug, because it fails
+    somewhere unrelated to its cause.
+
+    Tests that care about identity (repeat suppression, citation linking) still
+    pass call_id explicitly.
+    """
+    return ToolCall(id=call_id or f"toolu_{tool}_{uuid.uuid4().hex[:10]}",
                     name=tool, arguments=arguments)

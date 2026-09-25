@@ -16,9 +16,21 @@ export class ApiError extends Error {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  // Attach the signed-in user's token when there is one. The proxy forwards it
+  // and the API resolves a named person with a role; without it the proxy falls
+  // back to the service key, which may read and draft but never approve.
+  const { supabase } = await import("./supabase");
+  const token = supabase
+    ? (await supabase.auth.getSession()).data.session?.access_token
+    : undefined;
+
   const response = await fetch(`/api/proxy${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   const text = await response.text();
   const body = text ? JSON.parse(text) : {};
@@ -32,6 +44,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => call<Health>("/health"),
+  me: () => call<Me>("/me"),
 
   listRuns: (limit = 25) => call<{ runs: RunSummary[] }>(`/runs?limit=${limit}`),
   createRun: (question: string, allowWrites: boolean) =>
@@ -63,6 +76,12 @@ export const api = {
 };
 
 export const TERMINAL = ["completed", "failed", "budget_exceeded", "cancelled"];
+
+export type Me = {
+  actor: string;
+  role: "analyst" | "approver" | "service";
+  scopes: string[];
+};
 
 export type Health = {
   ok: boolean;
@@ -135,6 +154,8 @@ export type Findings = {
 
 export type Run = RunSummary & {
   allow_writes: boolean;
+  actor: string;
+  scopes: string[];
   error: string | null;
   final_answer: Findings | null;
   max_steps: number;

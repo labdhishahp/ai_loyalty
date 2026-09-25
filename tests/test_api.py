@@ -34,8 +34,16 @@ def client(monkeypatch, own_conn):
     monkeypatch.setattr("api.app.connection", one_connection)
     yield TestClient(app)
     own_conn.rollback()
+    # Matches every actor the API can produce: the service principal, and any
+    # signed-in test principal. An out-of-date filter here leaves rows behind
+    # that collide with the next test.
+    # A reserved, unroutable domain for test identities. Using example.com here
+    # once matched a real run created by an actual investigation, whose proposal
+    # then blocked the delete -- cleanup should never be able to reach data a
+    # test did not create.
     own_conn.execute(
-        "delete from ops.agent_runs where actor in ('operator','local')")
+        "delete from ops.agent_runs where actor in "
+        "('service','operator','local') or actor like '%@test.invalid'")
     own_conn.commit()
 
 
@@ -116,3 +124,71 @@ def test_listing_runs_omits_the_trace(client, monkeypatch):
     runs = client.get("/api/runs?limit=5", headers=HEADERS).json()["runs"]
     assert runs and "steps" not in runs[0]
     assert {"run_id", "question", "status", "cost_usd"} <= set(runs[0])
+
+
+# --------------------------------------------------- authorization at the API
+
+from core.auth import ROLE_SCOPES, Principal          # noqa: E402
+from api.app import require_principal                 # noqa: E402
+
+
+def as_principal(role: str, actor: str | None = None) -> Principal:
+    return Principal(actor=actor or f"{role}@test.invalid", role=role,
+                     user_id="test", scopes=ROLE_SCOPES[role])
+
+
+@pytest.fixture
+def signed_in(client):
+    """Sign the test client in as a chosen role."""
+    def use(role: str):
+        app.dependency_overrides[require_principal] = lambda: as_principal(role)
+        return client
+    yield use
+    app.dependency_overrides.clear()
+
+
+def test_the_service_key_cannot_approve_or_execute(client, monkeypatch):
+    """The separation of duties, at the boundary that matters. A shared secret
+    identifies no one, so it may not authorise anything reaching a customer."""
+    import uuid
+    fake_id = str(uuid.uuid4())
+    decision = client.post(f"/api/proposals/{fake_id}/decision",
+                           json={"decision": "approved"}, headers=HEADERS)
+    execution = client.post(f"/api/proposals/{fake_id}/execute",
+                            json={"idempotency_key": "x" * 12}, headers=HEADERS)
+    assert decision.status_code == 403
+    assert execution.status_code == 403
+    # 403 not 404: refused before the proposal is even looked up.
+    assert "approve" in decision.json()["detail"]
+
+
+def test_an_analyst_is_refused_approval(signed_in):
+    import uuid
+    response = signed_in("analyst").post(
+        f"/api/proposals/{uuid.uuid4()}/decision",
+        json={"decision": "approved"}, headers=HEADERS)
+    assert response.status_code == 403
+    assert "analyst" in response.json()["detail"]
+
+
+def test_an_approver_gets_past_the_permission_check(signed_in):
+    """404 rather than 403: allowed through, then the proposal did not exist."""
+    import uuid
+    response = signed_in("approver").post(
+        f"/api/proposals/{uuid.uuid4()}/decision",
+        json={"decision": "approved"}, headers=HEADERS)
+    assert response.status_code == 404
+
+
+def test_a_run_cannot_be_granted_permissions_its_creator_lacks(client, monkeypatch):
+    """The service key may read and propose, so a write-enabled run is fine for
+    it -- but the run records only the scopes its creator held."""
+    scripted(monkeypatch, fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)))
+    created = client.post("/api/runs",
+                          json={"question": "propose something for GB Gold",
+                                "allow_writes": True}, headers=HEADERS)
+    assert created.status_code == 201
+    run = client.get(f"/api/runs/{created.json()['run_id']}",
+                     headers=HEADERS).json()
+    assert run["actor"] == "service"
+    assert sorted(run["scopes"]) == ["propose", "read"]

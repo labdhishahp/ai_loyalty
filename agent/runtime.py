@@ -93,7 +93,8 @@ def _require_enabled() -> None:
 
 def create_run(conn, question: str, actor: str = "anonymous",
                provider_name: str | None = None,
-               allow_writes: bool = False) -> str:
+               allow_writes: bool = False,
+               scopes: frozenset[str] | None = None) -> str:
     _require_enabled()
     provider = factory.create(provider_name)
     budgets = Budgets.from_config()
@@ -101,11 +102,11 @@ def create_run(conn, question: str, actor: str = "anonymous",
     conn.execute("""
         insert into ops.agent_runs
             (run_id, question, status, provider, model,
-             max_steps, max_tokens, max_cost_usd, actor, allow_writes)
-        values (%s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)
+             max_steps, max_tokens, max_cost_usd, actor, allow_writes, scopes)
+        values (%s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s)
     """, (run_id, question, provider.name, provider.model,
           budgets.max_steps, budgets.max_tokens, budgets.max_cost_usd, actor,
-          allow_writes))
+          allow_writes, sorted(scopes or {"read"})))
     conn.commit()
     return run_id
 
@@ -319,7 +320,11 @@ def advance(conn, run_id: str) -> dict:
         call_started = time.time()
         outcome = REGISTRY.dispatch(call.name, call.arguments, ToolContext(
             conn=conn, actor=run["actor"], run_id=run_id,
-            allow_writes=run["allow_writes"]))
+            allow_writes=run["allow_writes"],
+            # Scopes are stored on the run, not re-derived here: the permissions
+            # that applied when the investigation started are the ones it runs
+            # under, even if the person's role changes mid-flight.
+            scopes=frozenset(run["scopes"] or ["read"])))
         elapsed = int((time.time() - call_started) * 1000)
 
         # The call_id in the trace must be the PROVIDER's id: that is what the

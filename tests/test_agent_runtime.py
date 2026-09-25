@@ -18,6 +18,7 @@ import pytest
 
 from agent import runtime
 from agent.findings import SUBMIT_FINDINGS
+from core.auth import PROPOSE, READ
 from llm import fake
 from llm.base import AssistantMessage, ToolResultsMessage, UserMessage
 
@@ -292,8 +293,11 @@ def test_a_proposal_records_the_run_that_produced_it(run_conn, scripted):
         fake.calls(fake.call("create_campaign_proposal", PROPOSAL_ARGS)),
         fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)),
     )
+    # Both gates must open: the run permits writes AND the caller holds the
+    # propose scope. Granting only one is tested separately.
     run_id = runtime.create_run(run_conn, QUESTION, actor="analyst@example.com",
-                                allow_writes=True)
+                                allow_writes=True,
+                                scopes=frozenset({READ, PROPOSE}))
     run = runtime.run_to_completion(run_conn, run_id)
     assert run["status"] == "completed"
 
@@ -315,9 +319,11 @@ def test_a_proposal_records_the_run_that_produced_it(run_conn, scripted):
 
 
 def test_a_read_only_run_cannot_create_a_proposal(run_conn, scripted):
+    """The RUN gate: writes were never enabled, whatever the caller may do."""
     scripted(fake.calls(fake.call("create_campaign_proposal", PROPOSAL_ARGS)),
              fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)))
-    run_id = runtime.create_run(run_conn, QUESTION)      # allow_writes defaults False
+    run_id = runtime.create_run(run_conn, QUESTION,
+                                scopes=frozenset({READ, PROPOSE}))
     run = runtime.run_to_completion(run_conn, run_id)
 
     refused = next(c for c in run["tool_calls"]
@@ -326,3 +332,24 @@ def test_a_read_only_run_cannot_create_a_proposal(run_conn, scripted):
     assert "read-only" in refused["error"]
     assert run_conn.execute(
         "select count(*) from ops.campaign_proposals").fetchone()[0] == 0
+
+
+def test_a_write_enabled_run_still_obeys_the_callers_permissions(run_conn, scripted):
+    """The CALLER gate: the run permits writes, the person does not.
+
+    This is the case that makes the two gates worth separating. Someone who may
+    only read can start a write-enabled investigation and still not create
+    anything, because authority belongs to the person, not the request.
+    """
+    scripted(fake.calls(fake.call("create_campaign_proposal", PROPOSAL_ARGS)),
+             fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)))
+    run_id = runtime.create_run(run_conn, QUESTION, actor="viewer@test.invalid",
+                                allow_writes=True,
+                                scopes=frozenset({READ}))
+    run = runtime.run_to_completion(run_conn, run_id)
+
+    refused = next(c for c in run["tool_calls"]
+                   if c["tool"] == "create_campaign_proposal")
+    assert refused["ok"] is False
+    assert "propose permission" in refused["error"]
+    assert "viewer@test.invalid" in refused["error"]

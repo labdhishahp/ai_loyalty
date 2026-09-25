@@ -12,9 +12,10 @@ One entry per capability, holding everything needed to expose it safely:
     handler        ordinary Python; knows nothing about models or prompts
     mutates        read or write. The write partition is empty today, and that
                    is a fact anyone can check rather than a promise.
-    scopes         required permissions. Unused until Milestone 4 adds identity,
-                   but present now because retrofitting authorization onto a
-                   dispatcher is how it ends up applied inconsistently.
+    scopes         permissions the caller must hold. Checked at dispatch against
+                   the context's scopes, so a tool cannot be reached by someone
+                   whose role does not include it -- regardless of which route,
+                   agent or protocol got them here.
 
 PROTOCOL-AGNOSTIC BY CONSTRUCTION. Nothing here knows about Anthropic, OpenAI or
 MCP. `schemas()` emits plain JSON Schema; each provider adapts it. An MCP server
@@ -124,7 +125,19 @@ class ToolContext:
     conn: object                       # psycopg connection
     actor: str = "system"              # who is asking; recorded on anything written
     run_id: str | None = None          # the investigation, when there is one
-    allow_writes: bool = False         # may this caller use write tools?
+
+    # TWO INDEPENDENT GATES, and both must open.
+    #
+    # allow_writes is a property of the RUN: an investigation that was started
+    # read-only stays read-only even for someone who could have enabled writes.
+    # scopes is a property of the CALLER: what this person or service may do at
+    # all. An analyst running a write-enabled investigation still cannot approve
+    # anything, because approval is not in their scopes.
+    #
+    # Collapsing these into one flag would mean "this run may write" and "this
+    # caller may write" were the same statement, and they are not.
+    allow_writes: bool = False
+    scopes: frozenset[str] = frozenset({"read"})
 
 
 @dataclass(frozen=True)
@@ -221,6 +234,13 @@ class Registry:
         if tool.mutates and not ctx.allow_writes:
             return ToolFailure(name, call_id, "not_permitted",
                                f"{name} changes data and this run is read-only.")
+
+        missing = set(tool.scopes) - set(ctx.scopes)
+        if missing:
+            return ToolFailure(name, call_id, "not_permitted",
+                               f"{name} requires the "
+                               f"{', '.join(sorted(missing))} permission, which "
+                               f"{ctx.actor} does not have.")
 
         try:
             validated = tool.input_model.model_validate(raw_input or {})
