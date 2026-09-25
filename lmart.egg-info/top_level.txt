@@ -5,5 +5,6 @@ core
 knowledge
 llm
 metrics
+scripts
 seed
 tools

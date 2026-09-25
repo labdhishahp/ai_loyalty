@@ -330,8 +330,12 @@ def test_a_read_only_run_cannot_create_a_proposal(run_conn, scripted):
                    if c["tool"] == "create_campaign_proposal")
     assert refused["ok"] is False
     assert "read-only" in refused["error"]
+    # Scoped to this run. Counting every proposal in the table assumes the table
+    # belongs to the test, which is the same mistake that let a cleanup destroy
+    # a real investigation's output.
     assert run_conn.execute(
-        "select count(*) from ops.campaign_proposals").fetchone()[0] == 0
+        "select count(*) from ops.campaign_proposals where run_id = %s",
+        (run_id,)).fetchone()[0] == 0
 
 
 def test_a_write_enabled_run_still_obeys_the_callers_permissions(run_conn, scripted):

@@ -18,7 +18,7 @@ dependencies = [
 # setuptools refuses to guess between them. `db/` holds scripts run directly
 # (python db/migrate.py), not an importable package.
 [tool.setuptools]
-packages = ["seed", "metrics", "core", "tools", "llm", "agent", "api", "knowledge", "actions"]
+packages = ["seed", "metrics", "core", "tools", "llm", "agent", "api", "knowledge", "actions", "scripts"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

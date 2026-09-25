@@ -25,26 +25,54 @@ GB_GOLD = {"countries": ["GB"], "tiers": ["GOLD"], "tier_as_of": "2026-01-15"}
 
 @pytest.fixture
 def clean(own_conn):
-    """Proposals created by a test are removed afterwards, including anything
-    they executed into the business tables."""
+    """Remove only what THIS test created.
+
+    An earlier version deleted every row in campaign_proposals, approvals,
+    campaign_executions and audit_log. That is a cleanup that can reach data the
+    test did not create, and it did: running the suite destroyed a proposal an
+    actual investigation had produced. A test should never be able to delete
+    something it did not make.
+
+    So the ids present beforehand are recorded, and only the difference is
+    removed. This holds however a row was created -- through a helper, a tool,
+    or the API.
+    """
+    def ids(table, column):
+        return {r[0] for r in own_conn.execute(
+            f"select {column} from {table}").fetchall()}
+
+    before = {
+        "proposals": ids("ops.campaign_proposals", "proposal_id"),
+        "approvals": ids("ops.approvals", "approval_id"),
+        "executions": ids("ops.campaign_executions", "execution_id"),
+        "audit": ids("ops.audit_log", "audit_id"),
+    }
     yield own_conn
+
     own_conn.rollback()
-    # Order matters: campaign_executions references lmart.campaigns, so the
-    # referencing rows go first. The ids are captured before that reference is
-    # dropped, because afterwards there is nothing left pointing at them.
-    created = [r[0] for r in own_conn.execute(
+    new_executions = ids("ops.campaign_executions", "execution_id") - before["executions"]
+    campaigns = [r[0] for r in own_conn.execute(
         "select campaign_id from ops.campaign_executions "
-        "where campaign_id is not null").fetchall()]
-    own_conn.execute("delete from ops.campaign_executions")
-    own_conn.execute("delete from ops.approvals")
-    own_conn.execute("delete from ops.campaign_proposals")
-    own_conn.execute("delete from ops.audit_log")
-    if created:
+        "where execution_id = any(%s) and campaign_id is not null",
+        (list(new_executions),)).fetchall()] if new_executions else []
+
+    # Referencing rows first: campaign_executions points at lmart.campaigns.
+    for table, column, keep in (
+            ("ops.campaign_executions", "execution_id", before["executions"]),
+            ("ops.approvals", "approval_id", before["approvals"]),
+            ("ops.campaign_proposals", "proposal_id", before["proposals"]),
+            ("ops.audit_log", "audit_id", before["audit"])):
+        current = ids(table, column)
+        created = list(current - keep)
+        if created:
+            own_conn.execute(
+                f"delete from {table} where {column} = any(%s)", (created,))
+    if campaigns:
         own_conn.execute(
             "delete from lmart.campaign_events where campaign_id = any(%s)",
-            (created,))
+            (campaigns,))
         own_conn.execute("delete from lmart.campaigns where campaign_id = any(%s)",
-                         (created,))
+                         (campaigns,))
     own_conn.commit()
 
 

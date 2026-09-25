@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 actions/__init__.py
+actions/approval.py
 actions/audience.py
 actions/policy_engine.py
 actions/proposals.py
@@ -14,6 +15,7 @@ api/__init__.py
 api/app.py
 api/index.py
 core/__init__.py
+core/auth.py
 core/config.py
 core/db.py
 core/errors.py
@@ -39,6 +41,8 @@ metrics/__main__.py
 metrics/catalog.py
 metrics/cohort.py
 metrics/engine.py
+scripts/__init__.py
+scripts/users.py
 seed/__init__.py
 seed/ablate.py
 seed/config.py
@@ -48,8 +52,10 @@ seed/population.py
 seed/reference.py
 seed/simulate.py
 seed/verify.py
+tests/test_actions.py
 tests/test_agent_runtime.py
 tests/test_api.py
+tests/test_auth.py
 tests/test_cohort.py
 tests/test_config.py
 tests/test_db_urls.py
