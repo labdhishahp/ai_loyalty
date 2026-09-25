@@ -4,6 +4,7 @@ api
 core
 knowledge
 llm
+mcp_server
 metrics
 scripts
 seed

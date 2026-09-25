@@ -36,6 +36,10 @@ lmart.egg-info/SOURCES.txt
 lmart.egg-info/dependency_links.txt
 lmart.egg-info/requires.txt
 lmart.egg-info/top_level.txt
+mcp_server/__init__.py
+mcp_server/__main__.py
+mcp_server/auth.py
+mcp_server/server.py
 metrics/__init__.py
 metrics/__main__.py
 metrics/catalog.py

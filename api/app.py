@@ -19,7 +19,7 @@ start without one, because the failure mode of forgetting it is silent.
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -27,17 +27,46 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from agent import runtime
+from tools.registry import REGISTRY
 from core import config, db
 from core.auth import (APPROVE, EXECUTE, PROPOSE, READ, SERVICE_PRINCIPAL,
                        AuthError, Principal, principal_from_token)
 from core.errors import ActionableError
+from mcp_server.server import build_http
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("lmart.api")
 
 IS_SERVERLESS = bool(config.get("VERCEL") or config.get("VERCEL_ENV"))
 
-app = FastAPI(title="L-Mart AI Loyalty Operations", version="0.1.0")
+# ---------------------------------------------------------------------------
+# MCP, mounted alongside the REST API rather than run as a separate service.
+#
+# Same process, same database pool, same auth: an MCP caller is verified by the
+# code that verifies a REST caller, so there is one answer to "who may do what"
+# rather than two that can drift. A separate deployment would double the
+# configuration and the surface for no benefit at this size.
+#
+# The agent does NOT route through this. It dispatches in-process, so every tool
+# call lands in ops.tool_calls; going through MCP would hide those calls from
+# the application and blind the trace the whole project is built around.
+# ---------------------------------------------------------------------------
+mcp_server = build_http()
+mcp_app = mcp_server.streamable_http_app(streamable_http_path="/")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # The streamable-HTTP session manager owns per-client session state and must
+    # be running for the transport to work. Mounting the app without this yields
+    # a route that accepts requests and then fails on the first one.
+    async with mcp_server.session_manager.run():
+        yield
+
+
+app = FastAPI(title="L-Mart AI Loyalty Operations", version="0.1.0",
+              lifespan=lifespan)
+app.mount("/mcp", mcp_app)
 
 # The browser calls this API directly in development. In production both deploy
 # under one origin, so the permissive list is scoped to localhost only.
@@ -135,6 +164,8 @@ def health() -> dict:
         "agent_enabled": config.get_bool("AGENT_ENABLED", True),
         "auth_required": config.app_api_key() is not None,
         "supabase_url": config.get("SUPABASE_URL"),
+        "mcp_endpoint": "/mcp",
+        "mcp_tools": len(REGISTRY.schemas(include_writes=True)) - 1,  # no submit_findings
     }
 
 

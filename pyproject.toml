@@ -12,13 +12,14 @@ requires-python = ">=3.11"
 dependencies = [
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.0",
+    "mcp>=2.2",
 ]
 
 # Declared explicitly because the repo has two top-level directories and
 # setuptools refuses to guess between them. `db/` holds scripts run directly
 # (python db/migrate.py), not an importable package.
 [tool.setuptools]
-packages = ["seed", "metrics", "core", "tools", "llm", "agent", "api", "knowledge", "actions", "scripts"]
+packages = ["seed", "metrics", "core", "tools", "llm", "agent", "api", "knowledge", "actions", "scripts", "mcp_server"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
