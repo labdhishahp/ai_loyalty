@@ -15,7 +15,7 @@ import agent.findings  # noqa: F401  -- registers submit_findings
 import tools.catalog   # noqa: F401  -- registers the read tools
 import tools.action_tools     # noqa: F401  -- registers the write tools
 import tools.knowledge_tools  # noqa: F401  -- registers search_knowledge
-from tools.registry import REGISTRY
+from tools.registry import REGISTRY, ToolContext
 
 # A valid payload for submit_findings, which unlike the read tools cannot be
 # called with no arguments.
@@ -68,48 +68,48 @@ def test_the_write_partition_holds_exactly_one_tool():
 def test_a_write_tool_is_refused_when_the_run_is_read_only(db_conn):
     """Defence in depth: a read-only run does not offer write tools at all, and
     dispatch refuses them even if one were somehow requested."""
-    failure = REGISTRY.dispatch("create_campaign_proposal", {}, db_conn,
-                                allow_writes=False)
+    failure = REGISTRY.dispatch("create_campaign_proposal", {},
+                                ToolContext(conn=db_conn, allow_writes=False))
     assert failure.ok is False
     assert failure.error == "not_permitted"
 
 
-def test_unknown_tool_is_a_failure_not_an_exception(db_conn):
-    failure = REGISTRY.dispatch("delete_everything", {}, db_conn)
+def test_unknown_tool_is_a_failure_not_an_exception(tool_ctx):
+    failure = REGISTRY.dispatch("delete_everything", {}, tool_ctx)
     assert failure.ok is False
     assert failure.error == "unknown_tool"
     assert "get_metric" in failure.message          # tells it what does exist
 
 
-def test_validation_failure_names_the_field(db_conn):
+def test_validation_failure_names_the_field(tool_ctx):
     failure = REGISTRY.dispatch("get_metric", {"metric": "orders_per_member"},
-                                db_conn)
+                                tool_ctx)
     assert failure.ok is False and failure.error == "validation"
     assert "period_start" in failure.message
 
 
-def test_unexpected_argument_is_rejected(db_conn):
+def test_unexpected_argument_is_rejected(tool_ctx):
     failure = REGISTRY.dispatch(
         "get_metric", {**{k: str(v) for k, v in FOCUS.items()},
-                       "metric": "total_revenue", "sql": "drop table"}, db_conn)
+                       "metric": "total_revenue", "sql": "drop table"}, tool_ctx)
     assert failure.ok is False and failure.error == "validation"
 
 
-def test_a_failing_handler_does_not_leak_the_query(db_conn):
+def test_a_failing_handler_does_not_leak_the_query(tool_ctx):
     """A database error can quote the statement. The model must not learn the
     schema from an error message."""
     failure = REGISTRY.dispatch(
         "get_metric", {**{k: str(v) for k, v in FOCUS.items()},
-                       "metric": "no_such_metric"}, db_conn)
+                       "metric": "no_such_metric"}, tool_ctx)
     assert failure.ok is False
     assert "select" not in failure.message.lower()
     assert "lmart." not in failure.message
 
 
-def test_model_view_hides_sql_and_trace_view_keeps_it(db_conn):
+def test_model_view_hides_sql_and_trace_view_keeps_it(tool_ctx):
     result = REGISTRY.dispatch(
         "get_metric", {**{k: str(v) for k, v in FOCUS.items()},
-                       "metric": "total_revenue", "countries": ["GB"]}, db_conn)
+                       "metric": "total_revenue", "countries": ["GB"]}, tool_ctx)
     assert result.ok is True
     assert "internals" not in result.for_model()
     assert "sql" not in str(result.for_model()).lower()
@@ -118,8 +118,8 @@ def test_model_view_hides_sql_and_trace_view_keeps_it(db_conn):
 
 # ------------------------------------------------------------- behaviour
 
-def test_reference_data_gives_the_codes_that_filters_need(db_conn):
-    result = REGISTRY.dispatch("get_reference_data", {}, db_conn)
+def test_reference_data_gives_the_codes_that_filters_need(tool_ctx):
+    result = REGISTRY.dispatch("get_reference_data", {}, tool_ctx)
     assert result.ok
     assert "GB" in result.data["countries"]
     assert {t["tier_code"] for t in result.data["tiers"]} >= {"GOLD", "PLATINUM"}
@@ -128,64 +128,64 @@ def test_reference_data_gives_the_codes_that_filters_need(db_conn):
     assert "UK Gold Reactivation" in programmes
 
 
-def test_get_metric_reports_cohort_size_next_to_the_value(db_conn):
+def test_get_metric_reports_cohort_size_next_to_the_value(tool_ctx):
     result = REGISTRY.dispatch("get_metric", {
         "metric": "orders_per_member", "period_start": "2026-06-01",
         "period_end": "2026-09-01", "countries": ["GB"], "tiers": ["GOLD"],
-        "tier_as_of": "period_end"}, db_conn)
+        "tier_as_of": "period_end"}, tool_ctx)
     assert result.ok
     assert result.meta["cohort_size"] > 100
     assert "customers" in result.summary
 
 
-def test_tier_without_as_of_fails_with_an_explanation(db_conn):
+def test_tier_without_as_of_fails_with_an_explanation(tool_ctx):
     """The single most important guard rail in the system, reachable by the
     model exactly as a person would hit it."""
     failure = REGISTRY.dispatch("get_metric", {
         "metric": "orders_per_member", "period_start": "2026-06-01",
-        "period_end": "2026-09-01", "tiers": ["GOLD"]}, db_conn)
+        "period_end": "2026-09-01", "tiers": ["GOLD"]}, tool_ctx)
     assert failure.ok is False
     assert "tier_as_of" in failure.message
 
 
-def test_list_campaigns_reveals_the_programme_that_stopped(db_conn):
-    result = REGISTRY.dispatch("list_campaigns", {}, db_conn)
+def test_list_campaigns_reveals_the_programme_that_stopped(tool_ctx):
+    result = REGISTRY.dispatch("list_campaigns", {}, tool_ctx)
     assert result.ok
     by_name = {r["programme"]: r for r in result.data}
     assert by_name["UK Gold Reactivation"]["last_wave"] < date(2026, 6, 1)
     assert by_name["Global Rewards Digest"]["last_wave"] >= date(2026, 8, 1)
 
 
-def test_list_campaigns_for_an_unknown_programme_says_how_to_recover(db_conn):
-    result = REGISTRY.dispatch("list_campaigns", {"programme": "Nope"}, db_conn)
+def test_list_campaigns_for_an_unknown_programme_says_how_to_recover(tool_ctx):
+    result = REGISTRY.dispatch("list_campaigns", {"programme": "Nope"}, tool_ctx)
     assert result.data == []
     assert "list_campaigns without a programme" in result.summary
 
 
-def test_search_and_then_360(db_conn):
+def test_search_and_then_360(tool_ctx):
     found = REGISTRY.dispatch("search_customers", {
         "countries": ["GB"], "tiers": ["GOLD"], "tier_as_of": "2026-01-15",
-        "limit": 5}, db_conn)
+        "limit": 5}, tool_ctx)
     assert found.ok and found.data
     customer_id = found.data[0]["customer_id"]
 
     detail = REGISTRY.dispatch("get_customer_360",
-                               {"customer_id": customer_id}, db_conn)
+                               {"customer_id": customer_id}, tool_ctx)
     assert detail.ok
     assert detail.data["profile"]["country_code"] == "GB"
     assert detail.data["tier_history"]
     assert "orders" in detail.data["orders_summary"]
 
 
-def test_missing_customer_is_reported_not_crashed(db_conn):
+def test_missing_customer_is_reported_not_crashed(tool_ctx):
     result = REGISTRY.dispatch("get_customer_360", {"customer_id": 99999999},
-                               db_conn)
+                               tool_ctx)
     assert result.ok and result.data == {}
     assert "No customer" in result.summary
 
 
 @pytest.mark.parametrize("name", sorted(t.name for t in REGISTRY.readable()))
-def test_every_tool_runs_against_the_real_schema(db_conn, name):
+def test_every_tool_runs_against_the_real_schema(tool_ctx, name):
     """Catches SQL that only fails when executed -- a wrong column, an
     ambiguous alias -- which no schema check can see."""
     minimal = {
@@ -201,4 +201,4 @@ def test_every_tool_runs_against_the_real_schema(db_conn, name):
                              "tiers": ["GOLD"], "tier_as_of": "2026-01-15",
                              "holdout_pct": 10},
     }.get(name, {})
-    assert REGISTRY.dispatch(name, minimal, db_conn).ok
+    assert REGISTRY.dispatch(name, minimal, tool_ctx).ok

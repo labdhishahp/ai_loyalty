@@ -32,7 +32,7 @@ from actions.policy_engine import validate
 
 from .catalog import _Input
 from .envelope import ToolResult
-from .registry import tool
+from .registry import ToolContext, tool
 
 
 class _CampaignShape(_Input):
@@ -90,7 +90,8 @@ class PreviewInput(_CampaignShape):
       "nothing. Each failed check names the rule, the limit and what you asked "
       "for, so it tells you how to fix it.",
       PreviewInput)
-def preview_campaign(inp: PreviewInput, conn) -> ToolResult:
+def preview_campaign(inp: PreviewInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     spec = AudienceSpec.from_dict(inp.audience())
     resolved = resolve(conn, spec)
     result = validate(conn, offer_type=inp.offer_type,
@@ -133,9 +134,15 @@ class ProposeInput(_CampaignShape):
       "that fails its checks can be created but will not be approvable. You "
       "cannot approve or execute a campaign; a person does that.",
       ProposeInput, mutates=True, scopes=("propose",))
-def create_campaign_proposal(inp: ProposeInput, conn) -> ToolResult:
+def create_campaign_proposal(inp: ProposeInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     proposal = proposals.create(
-        conn, run_id=None, name=inp.name, objective=inp.objective,
+        # The investigation that produced this. Previously hardcoded to None,
+        # which severed every agent-created proposal from the evidence
+        # justifying it: the approval screen could never link back to the run,
+        # and the cited call_ids pointed at a trace nobody could find.
+        conn, run_id=ctx.run_id, created_by=ctx.actor,
+        name=inp.name, objective=inp.objective,
         programme=inp.programme, channel=inp.channel, offer_type=inp.offer_type,
         offer_value=inp.offer_value, audience=inp.audience(),
         holdout_pct=inp.holdout_pct, rationale=inp.rationale,

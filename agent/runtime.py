@@ -36,7 +36,7 @@ from core.errors import ActionableError
 from llm import factory, pricing
 from llm.base import (LLMError, Message, ToolOutcome, ToolResultsMessage,
                       ToolSpec, Usage, UserMessage)
-from tools.registry import REGISTRY
+from tools.registry import REGISTRY, ToolContext
 
 from .findings import SUBMIT_FINDINGS
 from .prompt import SYSTEM_PROMPT
@@ -317,8 +317,9 @@ def advance(conn, run_id: str) -> dict:
             continue
 
         call_started = time.time()
-        outcome = REGISTRY.dispatch(call.name, call.arguments, conn,
-                                    allow_writes=run["allow_writes"])
+        outcome = REGISTRY.dispatch(call.name, call.arguments, ToolContext(
+            conn=conn, actor=run["actor"], run_id=run_id,
+            allow_writes=run["allow_writes"]))
         elapsed = int((time.time() - call_started) * 1000)
 
         # The call_id in the trace must be the PROVIDER's id: that is what the

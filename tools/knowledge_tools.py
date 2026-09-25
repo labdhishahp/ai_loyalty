@@ -22,7 +22,7 @@ from knowledge import retrieval
 
 from .catalog import _Input
 from .envelope import ToolResult
-from .registry import tool
+from .registry import ToolContext, tool
 
 DOC_TYPES = ("policy", "playbook", "guideline", "postmortem", "memo")
 
@@ -58,7 +58,8 @@ class SearchKnowledgeInput(_Input):
       "question is usually not the one you started with. Superseded documents "
       "are excluded automatically, so what comes back is current.",
       SearchKnowledgeInput)
-def search_knowledge(inp: SearchKnowledgeInput, conn) -> ToolResult:
+def search_knowledge(inp: SearchKnowledgeInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     passages = retrieval.search(
         conn, inp.query, jurisdiction=inp.jurisdiction,
         doc_types=list(inp.doc_types) or None, limit=inp.limit)

@@ -85,3 +85,10 @@ SAMPLE_FINDINGS = {
 @pytest.fixture
 def sample_findings():
     return dict(SAMPLE_FINDINGS)
+
+
+@pytest.fixture
+def tool_ctx(db_conn):
+    """A ToolContext for a plain read-only caller, as the tool tests need it."""
+    from tools.registry import ToolContext
+    return ToolContext(conn=db_conn, actor="test")

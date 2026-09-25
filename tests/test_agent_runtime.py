@@ -257,3 +257,72 @@ def test_a_run_with_writes_enabled_is_offered_the_proposal_tool(
     run_id = runtime.create_run(run_conn, QUESTION, allow_writes=True)
     runtime.run_to_completion(run_conn, run_id)
     assert "create_campaign_proposal" in {t.name for t in provider.requests[0].tools}
+
+
+# ----------------------------------------------------- run -> proposal link
+
+PROPOSAL_ARGS = {
+    "name": "UK Gold Reactivation - October 2026",
+    "objective": "Return lapsed GB Gold members to the store.",
+    "programme": "UK Gold Reactivation",
+    "channel": "email",
+    "offer_type": "points_multiplier",
+    "offer_value": 2.0,
+    "countries": ["GB"],
+    "tiers": ["GOLD"],
+    "tier_as_of": "2026-01-15",
+    "lapsed_min_days": 21,
+    "holdout_pct": 10,
+    "rationale": "The programme that drove this segment was stopped in May 2026.",
+    "evidence_call_ids": ["toolu_evidence_1"],
+}
+
+
+def test_a_proposal_records_the_run_that_produced_it(run_conn, scripted):
+    """The link that makes a proposal auditable.
+
+    Before the tool context existed, handlers received only a connection, so
+    create_campaign_proposal had no way to know which investigation it was part
+    of and recorded run_id=None. Every agent-created proposal was then orphaned
+    from the evidence justifying it: the approval screen could not link back to
+    the run, and the call_ids cited in the rationale pointed at a trace nobody
+    could reach from the proposal.
+    """
+    scripted(
+        fake.calls(fake.call("create_campaign_proposal", PROPOSAL_ARGS)),
+        fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)),
+    )
+    run_id = runtime.create_run(run_conn, QUESTION, actor="analyst@example.com",
+                                allow_writes=True)
+    run = runtime.run_to_completion(run_conn, run_id)
+    assert run["status"] == "completed"
+
+    created = next(c for c in run["tool_calls"]
+                   if c["tool"] == "create_campaign_proposal")
+    assert created["ok"], created["error"]
+    proposal_id = created["result"]["data"]["proposal_id"]
+
+    row = run_conn.execute(
+        "select run_id, created_by from ops.campaign_proposals where proposal_id=%s",
+        (proposal_id,)).fetchone()
+    assert str(row[0]) == run_id          # linked to its investigation
+    assert row[1] == "analyst@example.com"  # and to whoever asked
+
+    run_conn.execute("delete from ops.campaign_proposals where proposal_id=%s",
+                     (proposal_id,))
+    run_conn.execute("delete from ops.audit_log where subject_id=%s", (proposal_id,))
+    run_conn.commit()
+
+
+def test_a_read_only_run_cannot_create_a_proposal(run_conn, scripted):
+    scripted(fake.calls(fake.call("create_campaign_proposal", PROPOSAL_ARGS)),
+             fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)))
+    run_id = runtime.create_run(run_conn, QUESTION)      # allow_writes defaults False
+    run = runtime.run_to_completion(run_conn, run_id)
+
+    refused = next(c for c in run["tool_calls"]
+                   if c["tool"] == "create_campaign_proposal")
+    assert refused["ok"] is False
+    assert "read-only" in refused["error"]
+    assert run_conn.execute(
+        "select count(*) from ops.campaign_proposals").fetchone()[0] == 0

@@ -34,7 +34,7 @@ from metrics.cohort import PERIOD_END, CohortSpec, build_cohort_sql
 from metrics.engine import MetricRequest, execute
 
 from .envelope import ToolResult
-from .registry import tool
+from .registry import ToolContext, tool
 
 
 class _Input(BaseModel):
@@ -63,7 +63,8 @@ class ReferenceInput(_Input):
       "exactly like 'nothing happened', so guessing produces confident wrong "
       "answers.",
       ReferenceInput)
-def get_reference_data(_: ReferenceInput, conn) -> ToolResult:
+def get_reference_data(_: ReferenceInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     data = {
         "countries": [r["country_code"] for r in _rows(
             conn, "select distinct country_code from lmart.customers order by 1")],
@@ -103,7 +104,8 @@ class ListMetricsInput(_Input):
       "unit, how it is split, and which filters it accepts. Call this before "
       "get_metric unless you already know the exact metric name.",
       ListMetricsInput)
-def list_metrics(_: ListMetricsInput, conn) -> ToolResult:
+def list_metrics(_: ListMetricsInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     entries = metric_catalog.catalogue()
     return ToolResult(tool="list_metrics", call_id="", data=entries,
                       summary=f"{len(entries)} metrics available: "
@@ -154,7 +156,8 @@ class GetMetricInput(_Input):
       "the cohort's membership changed, and only both numbers together "
       "distinguish them.",
       GetMetricInput)
-def get_metric(inp: GetMetricInput, conn) -> ToolResult:
+def get_metric(inp: GetMetricInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     as_of: date | str | None = None
     if inp.tier_as_of:
         as_of = (PERIOD_END if inp.tier_as_of == PERIOD_END
@@ -209,7 +212,8 @@ class ListCampaignsInput(_Input):
       "record of being switched off, only an absence of waves after a date. No "
       "metric can show you an absence, so this is the only way to see it.",
       ListCampaignsInput)
-def list_campaigns(inp: ListCampaignsInput, conn) -> ToolResult:
+def list_campaigns(inp: ListCampaignsInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     if inp.programme is None:
         rows = _rows(conn, """
             select c.programme, count(distinct c.campaign_id) as waves,
@@ -269,7 +273,8 @@ class SearchCustomersInput(_Input):
       "loyalty tier. Returns identifiers and basic attributes, not behaviour -- "
       "use get_customer_360 for one customer's history.",
       SearchCustomersInput)
-def search_customers(inp: SearchCustomersInput, conn) -> ToolResult:
+def search_customers(inp: SearchCustomersInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     as_of: date | str | None = None
     if inp.tier_as_of:
         as_of = (PERIOD_END if inp.tier_as_of == PERIOD_END
@@ -318,7 +323,8 @@ class Customer360Input(_Input):
       "orders, and campaign engagement. Use it to check whether an aggregate "
       "finding holds for an individual, or to investigate one account.",
       Customer360Input)
-def get_customer_360(inp: Customer360Input, conn) -> ToolResult:
+def get_customer_360(inp: Customer360Input, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     profile = _rows(conn, """
         select c.customer_id, c.external_ref, c.full_name, c.email,
                c.country_code, c.city, c.signed_up_on, c.marketing_opt_in,

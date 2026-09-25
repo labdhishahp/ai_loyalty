@@ -22,7 +22,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.envelope import ToolResult
-from tools.registry import tool
+from tools.registry import ToolContext, tool
 
 SUBMIT_FINDINGS = "submit_findings"
 
@@ -80,7 +80,8 @@ class FindingsInput(BaseModel):
       "is the only way to finish: conclusions written as prose without calling "
       "this are not recorded as an answer.",
       FindingsInput)
-def submit_findings(inp: FindingsInput, conn) -> ToolResult:
+def submit_findings(inp: FindingsInput, ctx: ToolContext) -> ToolResult:
+    conn = ctx.conn
     # Storing the answer is the runtime's job -- it owns the run row. This
     # handler exists so the capability is defined in one place with everything
     # else, and validated by the same machinery.

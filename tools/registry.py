@@ -105,6 +105,29 @@ def _strip_all(schema: dict) -> None:
 
 
 @dataclass(frozen=True)
+class ToolContext:
+    """Everything a handler needs to know about WHO is calling and WHY.
+
+    Previously a handler received only a database connection, which was enough
+    to read but not enough to write: a proposal created by the agent had no way
+    to record which investigation produced it, so `run_id` was hardcoded to None
+    and every agent-created proposal was orphaned from its evidence.
+
+    Carrying a context rather than adding a second parameter is deliberate. Two
+    more callers are coming that are not the agent -- an MCP server acting for
+    an external client, and eventually a signed-in human -- and each supplies a
+    different actor, different permissions and no run at all. A context object
+    means those callers differ in the VALUE they pass, not in the shape of the
+    call.
+    """
+
+    conn: object                       # psycopg connection
+    actor: str = "system"              # who is asking; recorded on anything written
+    run_id: str | None = None          # the investigation, when there is one
+    allow_writes: bool = False         # may this caller use write tools?
+
+
+@dataclass(frozen=True)
 class Tool:
     name: str
     description: str
@@ -181,8 +204,8 @@ class Registry:
                  "input_schema": t.schema(), "strict": t.strict}
                 for t in sorted(tools, key=lambda t: t.name)]
 
-    def dispatch(self, name: str, raw_input: dict, conn,
-                 allow_writes: bool = False) -> ToolResult | ToolFailure:
+    def dispatch(self, name: str, raw_input: dict,
+                 ctx: ToolContext) -> ToolResult | ToolFailure:
         """Validate, authorise, execute. Never raises for an expected failure.
 
         The model's output is untrusted input to this system, exactly like a
@@ -195,7 +218,7 @@ class Registry:
                                f"No tool named {name!r}. Available: "
                                f"{', '.join(self.names())}")
 
-        if tool.mutates and not allow_writes:
+        if tool.mutates and not ctx.allow_writes:
             return ToolFailure(name, call_id, "not_permitted",
                                f"{name} changes data and this run is read-only.")
 
@@ -205,6 +228,7 @@ class Registry:
             return ToolFailure(name, call_id, "validation",
                                _readable_validation_error(exc))
 
+        conn = ctx.conn
         try:
             with conn.cursor() as cur:
                 # set_config(), not SET LOCAL: Postgres's SET does not accept
@@ -212,7 +236,7 @@ class Registry:
                 # statement would be a needless injection point.
                 cur.execute("select set_config('statement_timeout', %s, true)",
                             (str(int(tool.timeout_seconds * 1000)),))
-            result = tool.handler(validated, conn)
+            result = tool.handler(validated, ctx)
         except ActionableError as exc:
             # Written for the caller and safe to return verbatim. This is how
             # the model learns, for instance, that a tier filter needs an
