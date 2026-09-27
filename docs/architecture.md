@@ -147,6 +147,13 @@ testable without a database. The metrics reproduce every number in the answer ke
 via SQL written independently of `seed/verify.py` -- two implementations agreeing
 to the decimal, which is a real cross-check rather than a regression baseline.
 
-Not yet built: tool registry, agent runtime, operations tables.
+**Everything through Milestone 4 is built**, plus MCP: metrics layer, tool
+registry, durable agent runtime, operations tables, knowledge retrieval,
+proposals, policy validation, hash-bound approval, idempotent execution, audit,
+HTTP API, frontend, and an MCP server over the same registry.
+
+Not built, and deliberately so: deployment (written for Vercel, never deployed),
+CI, and multi-agent fan-out — which was always conditional on eval evidence that
+does not yet exist.
 Operations tables are deliberately absent — no consumer exists yet, and they will
 land in the slice that uses them.

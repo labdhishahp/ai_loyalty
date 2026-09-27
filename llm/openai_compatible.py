@@ -1,10 +1,24 @@
 """OpenAI-compatible adapter — the CoE AI Gateway, and anything speaking the
 same protocol (LiteLLM, vLLM, SGLang, OpenRouter, Together).
 
-Written and tested against the neutral contract, but NOT yet exercised against
-the CoE gateway itself: its base URL and model id could not be discovered. See
-docs/coe-gateway-investigation.md. Filling in COE_BASE_URL and COE_MODEL is all
-that is required -- no code change.
+WHAT IS VERIFIED, AND WHAT IS NOT. Be precise about this, because a provider
+that looks like a working fallback but has never run is worse than an absent
+one -- it invites someone to rely on it.
+
+  VERIFIED   The translation in both directions, against a fake gateway in
+             tests/test_openai_compatible.py: the system message, the one-
+             message-per-tool-result divergence, argument serialisation,
+             finish-reason mapping, malformed JSON, missing usage, and that a
+             gateway error surfaces as LLMError. No network, no key, no cost.
+
+  NOT        That any real endpoint accepts these requests. The CoE gateway's
+             base URL and model id could never be discovered (see
+             docs/coe-gateway-investigation.md), so this code has never made a
+             live call. Whether a given endpoint implements `tools` at all is a
+             property of that endpoint, and no test here can establish it.
+
+Filling in COE_BASE_URL and COE_MODEL is all that should be required -- no code
+change -- but "should be" is the honest tense until someone runs it.
 
 The one real difference from Anthropic is tool results. Anthropic wants every
 result in a single user message; OpenAI wants one message per result, each

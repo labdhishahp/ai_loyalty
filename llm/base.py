@@ -22,7 +22,7 @@ meaningless to another provider and must not be interpreted by the agent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 
@@ -109,21 +109,3 @@ class Provider(Protocol):
 
     def complete(self, *, system: str, messages: list[Message],
                  tools: list[ToolSpec], max_tokens: int) -> Completion: ...
-
-
-@dataclass
-class Capabilities:
-    """What a provider was actually observed to support.
-
-    Measured by probing rather than assumed: "OpenAI-compatible" is a claim
-    about a URL shape, not a guarantee that `tools` is implemented. The agent
-    design rests on tool calling, so this is worth establishing before building
-    on it rather than discovering mid-run.
-    """
-    reachable: bool = False
-    generation: bool = False
-    tool_calling: bool = False
-    parallel_tool_calls: bool = False
-    structured_output: bool = False
-    streaming: bool = False
-    notes: list[str] = field(default_factory=list)

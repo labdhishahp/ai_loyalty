@@ -54,7 +54,6 @@ class CohortSpec:
     countries: tuple[str, ...] = ()
     tiers: tuple[str, ...] = ()
     tier_as_of: date | str | None = None
-    members_only: bool = False
 
     def validate(self) -> None:
         for country in self.countries:
@@ -108,8 +107,6 @@ class CohortSpec:
             anchor = ("as of the end of each period measured"
                       if self.tier_as_of == PERIOD_END else f"as of {as_of}")
             parts.append(f"{'/'.join(self.tiers)} tier ({anchor})")
-        elif self.members_only:
-            parts.append("loyalty members")
         return " ".join(parts) if parts else "all customers"
 
 
@@ -126,7 +123,7 @@ def build_cohort_sql(spec: CohortSpec, period_end: date) -> tuple[str, dict]:
     conditions: list[str] = []
     params: dict = {}
 
-    if spec.tiers or spec.members_only:
+    if spec.tiers:
         joins.append(
             "join lmart.loyalty_accounts la on la.customer_id = cust.customer_id")
 

@@ -80,9 +80,48 @@ be carried, verified, and refused.
 | Identity | `MCP_ACTOR` / `MCP_ROLE`, **read-only by default** | Supabase JWT, or the service key |
 | Verification | None needed | `core/auth.py`, the same code the REST API uses |
 
-There is no MCP-specific notion of permission. `ROLE_SCOPES` decides, the
-registry enforces, and a write tool is refused identically whichever door the
-caller came through.
+There is no MCP-specific notion of permission: `ROLE_SCOPES` decides and the
+registry enforces, the same code on every route.
+
+### How writes are authorised over MCP, precisely
+
+In-process, `dispatch()` puts two independent gates in front of a write tool:
+
+| Gate | Belongs to | Question it answers |
+|---|---|---|
+| `allow_writes` | the **run** | Was this investigation started with writing enabled? |
+| `scopes` | the **caller** | May this person or service write at all? |
+
+**Only the second gate does any work over MCP.** An MCP call is not part of a
+run — there is no investigation to have been started read-only — so the adapter
+passes `allow_writes=tool.mutates` (`mcp_server/server.py`), which satisfies the
+run gate by construction. Its refusal, *"this tool changes data and this run is
+read-only"*, can never fire on an MCP call.
+
+That is not a hole, and it is worth being clear about why. `allow_writes` was
+never an authorization control; it is a per-run *narrowing* of authority the
+caller already holds, which is why `POST /api/runs` refuses `allow_writes: true`
+to anyone without `propose`. The control that decides whether a write is
+permitted is `scopes`, and it applies identically here: an MCP caller holding
+only `read` is refused `create_campaign_proposal` at dispatch, with the same
+message a run would get.
+
+The per-run narrowing still exists over MCP — it is just expressed where a
+runless protocol can express it, on the principal:
+
+* **stdio** starts at `{read}` and stays there unless `MCP_ALLOW_WRITES=true`.
+  A laptop session cannot write by accident.
+* **HTTP** takes scopes from `ops.user_roles`, so an analyst (`{read, propose}`)
+  can draft a proposal and an approver can do more, exactly as over REST.
+
+### What genuinely differs
+
+Not authority, but **provenance**. A proposal created through MCP has
+`run_id = NULL` and is attributed to the caller rather than to an investigation,
+so it carries no `evidence_call_ids` linking it back to measured numbers. It is
+still an inert draft that a human with `approve` and `execute` must sign off,
+and the content hash still binds that approval — but a reviewer opening it will
+find a proposal with no trace behind it. Worth knowing before trusting one.
 
 ## Running it
 

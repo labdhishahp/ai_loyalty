@@ -36,7 +36,7 @@ decision, and [docs/deployment.md](docs/deployment.md) for running it on Vercel.
 | **Actions** | Proposals validated by a deterministic policy engine against rules held in one place |
 | **Approval** | Hash-bound human approval, re-validation at execution, idempotent execution, append-only audit |
 | **UI** | Investigation, live trace, evidence you can click, approval review, audit |
-| **Tests** | 121, almost all with no model calls at all |
+| **Tests** | 226, every one of them with no model calls at all |
 
 ## Setup
 
@@ -77,9 +77,9 @@ on real data, available here only because we own the data-generating process —
 it means the eval's answer key is evidence rather than assertion.
 
 It also corrected the design twice. The tier review turned out to dominate
-(+18.4pp) rather than the campaign stop (+11.8pp), and the points expiry measured
-at +0.4pp, so it was reclassified from a cause into the dataset's hardest red
-herring rather than tuned up into one.
+(+18.7pp) rather than the campaign stop (+12.4pp), and the points expiry measured
+within noise (+2.3pp on orders, −3.7pp on spend, sd ~2.8), so it was reclassified
+from a cause into the dataset's hardest red herring rather than tuned up into one.
 
 ## Where it currently stands
 

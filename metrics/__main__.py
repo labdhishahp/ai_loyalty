@@ -58,7 +58,6 @@ def cohort_from(args) -> CohortSpec:
         countries=tuple(args.country or ()),
         tiers=tuple(args.tier or ()),
         tier_as_of=parse_as_of(args.as_of),
-        members_only=args.members_only,
     )
 
 
@@ -94,7 +93,6 @@ def main() -> int:
         p.add_argument("--country", action="append", help="repeatable, e.g. GB")
         p.add_argument("--tier", action="append", help="repeatable, e.g. GOLD")
         p.add_argument("--as-of", help=f"a date, or {PERIOD_END!r}")
-        p.add_argument("--members-only", action="store_true")
         p.add_argument("--monthly", action="store_true")
         p.add_argument("--filter", action="append", default=[],
                        metavar="NAME=VALUE")

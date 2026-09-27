@@ -10,6 +10,7 @@ from datetime import date
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from core import rate_limit
 from core.errors import ActionableError
 
 from .audience import AudienceSpec, resolve
@@ -46,6 +47,9 @@ def create(conn, *, run_id: str | None, name: str, objective: str,
     validated looks the same as one that passed, and the difference matters to
     whoever opens the approval screen.
     """
+    # Before resolving the audience, which is the expensive part.
+    rate_limit.check(conn, "proposal", created_by)
+
     spec = AudienceSpec.from_dict(audience)
     resolved = resolve(conn, spec)
     result = validate(conn, offer_type=offer_type, offer_value=offer_value,

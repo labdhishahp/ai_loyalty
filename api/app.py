@@ -32,6 +32,8 @@ from core import config, db
 from core.auth import (APPROVE, EXECUTE, PROPOSE, READ, SERVICE_PRINCIPAL,
                        AuthError, Principal, principal_from_token)
 from core.errors import ActionableError
+from core.rate_limit import RateLimited
+from core import rate_limit
 from mcp_server.server import build_http
 
 logging.basicConfig(level=logging.INFO)
@@ -186,12 +188,21 @@ def create_run(body: AskRequest,
                principal: Principal = Depends(require_principal)) -> dict:
     with connection() as conn:
         try:
+            # Before anything that costs money. A client stuck in a retry loop
+            # is the realistic failure here, not an attacker.
+            rate_limit.check(conn, "run", principal.actor)
             # A run may only be granted permissions its creator already holds.
             if body.allow_writes:
                 principal.require(PROPOSE)
             run_id = runtime.create_run(
                 conn, body.question, actor=principal.actor,
                 allow_writes=body.allow_writes, scopes=principal.scopes)
+        except RateLimited as exc:
+            # 429 with Retry-After: a well-behaved client backs off instead of
+            # hammering, which is the whole point of answering rather than
+            # dropping the connection.
+            raise HTTPException(429, str(exc),
+                                headers={"Retry-After": str(exc.retry_after)}) from exc
         except runtime.AgentDisabled as exc:
             raise HTTPException(503, str(exc)) from exc
         except AuthError as exc:

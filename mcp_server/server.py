@@ -52,7 +52,6 @@ from mcp.server.mcpserver import MCPServer
 
 from core import db
 from core.auth import Principal
-from knowledge import retrieval  # noqa: F401  (kept adjacent to resources below)
 from tools.envelope import json_safe
 from tools.registry import REGISTRY, ToolContext
 

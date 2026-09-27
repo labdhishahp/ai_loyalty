@@ -1,4 +1,4 @@
-"""Choosing a provider, and finding out what it can actually do."""
+"""Choosing a provider."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import logging
 
 from core import config
 
-from .base import Capabilities, LLMError, ToolSpec, UserMessage
 
 log = logging.getLogger(__name__)
 
@@ -53,44 +52,3 @@ def create(name: str | None = None):
         return OpenAICompatibleProvider()
     raise ValueError(f"Unknown LLM_PROVIDER {chosen!r}. Use one of: "
                      f"{', '.join(PROVIDERS)}")
-
-
-PROBE_TOOL = ToolSpec(
-    name="ping", description="Returns the word pong. Call it exactly once.",
-    input_schema={"type": "object", "properties": {"note": {"type": "string"}},
-                  "required": ["note"], "additionalProperties": False})
-
-
-def probe(provider) -> Capabilities:
-    """Establish what a provider supports, by asking it rather than assuming.
-
-    Exists because "OpenAI-compatible" describes a URL shape, not a feature set:
-    some gateways expose chat completions and no `tools` parameter at all. The
-    entire agent design rests on tool calling, so this runs before anything is
-    built on top of a new endpoint.
-    """
-    caps = Capabilities()
-    try:
-        plain = provider.complete(
-            system="Answer in one word.",
-            messages=[UserMessage("Say OK.")], tools=[], max_tokens=64)
-        caps.reachable = True
-        caps.generation = bool(plain.text)
-        caps.notes.append(f"generation: stop_reason={plain.stop_reason}")
-    except LLMError as exc:
-        caps.notes.append(f"unreachable: {exc}")
-        return caps
-
-    try:
-        tooled = provider.complete(
-            system="Use the ping tool.",
-            messages=[UserMessage("Call ping with note='hello'.")],
-            tools=[PROBE_TOOL], max_tokens=256)
-        caps.tool_calling = bool(tooled.tool_calls)
-        caps.notes.append(
-            f"tool calling: {len(tooled.tool_calls)} call(s), "
-            f"stop_reason={tooled.stop_reason}")
-    except LLMError as exc:
-        caps.notes.append(f"tool calling unsupported: {exc}")
-
-    return caps

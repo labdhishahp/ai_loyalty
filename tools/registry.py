@@ -10,8 +10,9 @@ One entry per capability, holding everything needed to expose it safely:
                    back, and it types the handler's argument. One definition,
                    three uses.
     handler        ordinary Python; knows nothing about models or prompts
-    mutates        read or write. The write partition is empty today, and that
-                   is a fact anyone can check rather than a promise.
+    mutates        read or write. The write partition holds exactly one tool,
+                   create_campaign_proposal, which records an inert draft; a
+                   test asserts that set rather than trusting the comment.
     scopes         permissions the caller must hold. Checked at dispatch against
                    the context's scopes, so a tool cannot be reached by someone
                    whose role does not include it -- regardless of which route,

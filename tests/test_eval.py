@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from eval.answer_key import GOLD_QUESTIONS, HEADLINE, GoldQuestion, match
+from eval.answer_key import (GOLD_QUESTIONS, HEADLINE, PROPOSAL,
+                             GoldQuestion, match)
 from eval.grade import grade
 
 HEADLINE_QUESTION = ("Why has engagement among Gold customers in the UK "
@@ -74,10 +75,16 @@ def test_the_headline_question_matches_its_rubric():
     assert match(HEADLINE_QUESTION) is HEADLINE
 
 
-def test_a_different_question_about_the_same_segment_does_not_match():
+def test_a_different_question_about_the_same_segment_gets_its_own_rubric():
     """The defect, pinned. Both questions mention GB Gold; only one asks why
-    engagement fell, and they have different right answers."""
-    assert match(PROPOSAL_QUESTION) is None
+    engagement fell, and they have different right answers.
+
+    When this was first fixed the proposal question had no rubric at all, so
+    the assertion was that it scored nothing. It has one now, so the property
+    worth holding is stronger: it must get ITS rubric, never the headline's.
+    """
+    assert match(PROPOSAL_QUESTION) is PROPOSAL
+    assert match(PROPOSAL_QUESTION) is not HEADLINE
 
 
 @pytest.mark.parametrize("question", [
@@ -148,8 +155,40 @@ def test_partial_credit_distinguishes_a_plausible_wrong_answer():
 
 # --------------------------------------------------------------- rubric
 
-def test_the_rubric_is_internally_consistent():
-    keys = [c.key for c in HEADLINE.criteria]
+@pytest.mark.parametrize("gold", GOLD_QUESTIONS, ids=lambda g: g.key)
+def test_every_rubric_is_internally_consistent(gold):
+    keys = [c.key for c in gold.criteria]
     assert len(keys) == len(set(keys)), "duplicate criterion keys"
-    assert all(c.weight > 0 for c in HEADLINE.criteria)
-    assert HEADLINE.total_weight == sum(c.weight for c in HEADLINE.criteria)
+    assert all(c.weight > 0 for c in gold.criteria)
+    assert gold.total_weight == sum(c.weight for c in gold.criteria)
+
+
+def test_no_two_rubrics_can_claim_the_same_question():
+    """The whole grader defect in one property. Two rubrics that both match a
+    question would make the score depend on declaration order, which is how a
+    confidently wrong number gets produced."""
+    for gold in GOLD_QUESTIONS:
+        claimants = [g.key for g in GOLD_QUESTIONS if g.matches(gold.question)]
+        assert claimants == [gold.key], f"{gold.key} is ambiguous: {claimants}"
+
+
+def test_the_proposal_rubric_does_not_grade_the_investigation_question():
+    """A proposal is not a diagnosis. Marking it down for failing to name the
+    beauty stockout would be the original defect wearing a new rubric."""
+    subjects = " ".join(c.key + c.description for c in PROPOSAL.criteria).lower()
+    for absent in ("beauty", "stockout", "points expiry", "year-over-year",
+                   "channel shift"):
+        assert absent not in subjects
+
+
+def test_the_proposal_rubric_rewards_the_playbook_not_a_vocabulary_match():
+    """An answer that echoes the question back must not score. The question
+    itself contains "propose", "lapsed", "GB Gold" and "campaign"."""
+    echo = {
+        "headline": "I will propose a campaign for lapsed GB Gold members.",
+        "verdict": "confirmed", "metrics_used": [], "comparison_basis": "",
+        "cohort_basis": "lapsed GB Gold members", "causes": [],
+        "ruled_out": [], "limitations": "", "recommended_next": "",
+    }
+    earned, _ = grade(echo, PROPOSAL)
+    assert earned == 0, "echoing the question scored points"

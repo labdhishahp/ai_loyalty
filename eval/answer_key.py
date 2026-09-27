@@ -79,6 +79,19 @@ def _any(haystack: str, *needles: str) -> bool:
     return any(n in haystack for n in needles)
 
 
+def _free_text(answer: dict) -> str:
+    """Every field a proposal's reasoning can legitimately land in.
+
+    The findings schema was designed for an investigation, so a proposal's
+    details are spread across the headline, the cohort basis and the
+    recommendation rather than sitting in one field. Requiring a specific field
+    would mark down a correct answer for filing it somewhere reasonable.
+    """
+    return _text(answer.get("headline", ""), answer.get("cohort_basis", ""),
+                 answer.get("comparison_basis", ""),
+                 answer.get("recommended_next", ""), _causes(answer))
+
+
 # The criteria themselves are unchanged; they now have an owner.
 HEADLINE_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
@@ -164,14 +177,141 @@ HEADLINE = GoldQuestion(
     criteria=HEADLINE_CRITERIA,
 )
 
-GOLD_QUESTIONS: tuple[GoldQuestion, ...] = (HEADLINE,)
+
+# ---------------------------------------------------------------------------
+# The proposal question. A DIFFERENT job, so a different rubric.
+#
+# Every criterion below comes from a document in the corpus -- eight of them are
+# the campaign proposal checklist, item for item, and the rest are the
+# reactivation playbook's offer, window and measurement rules. That is the point:
+# the question says "check what our playbooks and campaign policy say", so the
+# rubric is what those documents actually require, not a description of what a
+# run happened to produce. Two criteria here are ones the current best run
+# fails. They stay.
+# ---------------------------------------------------------------------------
+PROPOSAL_CRITERIA: tuple[Criterion, ...] = (
+    Criterion(
+        "stop_explained",
+        "Explains why the programme stopped, from the record rather than by "
+        "guessing", 2,
+        lambda a: _any(_free_text(a), "budget", "reallocation", "discontinu",
+                       "deliberate", "memo")),
+
+    Criterion(
+        "stop_verified_against_data",
+        "Checks the document's claim against the campaign record instead of "
+        "trusting it", 2,
+        lambda a: _any(_text(a["comparison_basis"]) + _causes(a),
+                       "wave", "list_campaigns", "last sent", "2026-05")),
+
+    # Checklist item 1.
+    Criterion(
+        "composition_ruled_out",
+        "Rules out a composition effect before treating the problem as real", 2,
+        lambda a: _any(_free_text(a) + _ruled_out(a),
+                       "composition", "tier review", "tier mix", "promot")),
+
+    # Checklist item 2. The single most important one: a list cannot be re-run,
+    # so a proposal built on one cannot be audited or repeated.
+    Criterion(
+        "audience_defined_by_rule",
+        "Defines the audience by a re-runnable rule, not a fixed list", 3,
+        lambda a: _any(_text(a["cohort_basis"]),
+                       "rule", "re-run", "rerun", "defined by")),
+
+    # Reactivation playbook: 21 to 90 days, with beyond-90 sent elsewhere.
+    Criterion(
+        "playbook_lapse_window",
+        "Uses the playbook's 21-90 day lapse window", 2,
+        lambda a: "21" in _free_text(a) and "90" in _free_text(a)),
+
+    # Checklist item 3.
+    Criterion(
+        "consent_respected",
+        "Applies consent at audience resolution", 2,
+        lambda a: _any(_free_text(a) + _ruled_out(a), "consent", "opt-in",
+                       "opt in")),
+
+    # Reactivation playbook: a multiplier rewards a return trip; a discount
+    # trains the segment to wait for markdowns.
+    Criterion(
+        "playbook_offer_type",
+        "Chooses a points multiplier, the playbook's instrument for lapsed "
+        "high-tier members", 2,
+        lambda a: _any(_free_text(a), "points multiplier", "multiplier")),
+
+    # Checklist item 5.
+    Criterion(
+        "offer_within_ceiling",
+        "States the offer value, so it can be checked against the ceiling", 2,
+        lambda a: _any(_free_text(a), "2.0x", "2x", "multiplier 2",
+                       "ceiling", "cap")),
+
+    # Checklist item 6, and the playbook's ten percent.
+    Criterion(
+        "holdout_defined",
+        "Defines a holdout rather than sending to the whole audience", 2,
+        lambda a: _any(_free_text(a), "holdout", "hold-out", "control group")),
+
+    # Checklist item 8, and the measurement guideline. Conversion rate on a
+    # reactivation campaign counts people who would have returned anyway.
+    Criterion(
+        "success_measure_is_incremental",
+        "Measures success incrementally, not by conversion rate", 2,
+        lambda a: _any(_free_text(a), "incremental", "against the holdout",
+                       "versus the holdout")),
+
+    # Checklist item 7.
+    Criterion(
+        "cost_stated",
+        "States the expected cost of the offer, not just the audience size", 2,
+        # An earlier draft of this criterion also accepted a recipient count,
+        # which made it pass on any answer that resolved an audience -- i.e. on
+        # everything. The checklist asks for a COST, because a multiplier's
+        # cost is what an approver is actually being asked to authorise.
+        lambda a: _any(_free_text(a), "cost", "spend", "budget impact",
+                       "points liability")),
+
+    Criterion(
+        "proposal_is_concrete",
+        "Produces an actual draft, not a description of one it would write", 2,
+        # Deliberately not "propose" or "proposal": the question contains both,
+        # so an answer that merely echoed it back would score. A run that only
+        # described its intent does not say it drafted anything.
+        lambda a: _any(_free_text(a), "draft", "awaiting approval")),
+
+    Criterion(
+        "evidence_cited", "Every cause cites at least one call_id", 2,
+        lambda a: bool(a["causes"])
+        and all(c["evidence_call_ids"] for c in a["causes"])),
+
+    Criterion(
+        "states_limits", "States what it could not determine", 1,
+        lambda a: len(a.get("limitations", "")) > 40),
+)
+
+PROPOSAL = GoldQuestion(
+    key="gb_gold_reactivation_proposal",
+    question=("The UK Gold Reactivation email programme stopped after its May "
+              "2026 wave. Check what our playbooks and campaign policy say, "
+              "then propose a campaign to re-engage lapsed GB Gold members."),
+    # Disjoint from the headline question by construction: that one requires
+    # "why", "engagement" and a word for falling, none of which appear here,
+    # and this one requires "propose" and "lapsed", which do not appear there.
+    # A test asserts the two never match the same question.
+    identifies=(
+        ("propose", "proposal"),
+        ("lapsed",),
+        ("gold",),
+        ("reactivat", "re-engage", "reengage"),
+    ),
+    criteria=PROPOSAL_CRITERIA,
+)
+
+
+GOLD_QUESTIONS: tuple[GoldQuestion, ...] = (HEADLINE, PROPOSAL)
 
 
 def match(question: str) -> GoldQuestion | None:
     """The gold question a run asked, or None if we have no rubric for it."""
     return next((g for g in GOLD_QUESTIONS if g.matches(question)), None)
-
-
-# Kept for callers that only care about the headline rubric.
-CRITERIA = HEADLINE_CRITERIA
-TOTAL_WEIGHT = HEADLINE.total_weight
