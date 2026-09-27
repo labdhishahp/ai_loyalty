@@ -47,6 +47,24 @@ thing that reads it is `scripts/users.py`, run from a laptop. Giving a
 deployment a key that bypasses row level security, for work it never does, is
 how blast radius grows quietly.
 
+### One turn at a time
+
+`POST /runs/{id}/advance` claims the run before it spends anything. Two
+requests reaching the same run — a double-clicked button, a client retrying
+after a platform timeout, two open tabs — used to *both* call the model and
+then collide on the step table, so the loser failed only after the expensive
+part was done. A single conditional `UPDATE` now decides it: Postgres
+serialises the row, the loser matches no rows and returns **409** without
+calling anything.
+
+The claim is a lease (`ops.agent_runs.turn_claimed_at`, 90s against a 60s
+`maxDuration`), not a lock. A serverless function can be killed without warning
+and has no `finally` to run, so a lock would wedge the run permanently — a
+worse failure than the double-spend it prevents. A claim older than any live
+turn could be is taken over automatically.
+
+Clients should treat 409 as "retry shortly", not as an error to show the user.
+
 ### MCP over HTTP
 
 Mounted at `/mcp`, and **stateless when deployed**. Streamable HTTP normally
@@ -111,7 +129,7 @@ precisely so the browser never holds it.
 Migrations are applied from a machine with the **direct** connection string:
 
 ```bash
-python db/migrate.py
+python db/migrate.py             # includes 0009 rate-limit indexes, 0010 turn claim
 python -m seed.load --reset      # only for a fresh database
 python -m seed.verify
 python -m knowledge.build_corpus && python -m knowledge.ingest --reset

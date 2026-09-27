@@ -49,6 +49,21 @@ import tools.action_tools      # noqa: F401  registers the write tools
 TERMINAL = ("completed", "failed", "budget_exceeded", "cancelled")
 MAX_NUDGES = 1
 
+# HOW LONG A TURN MAY HOLD A RUN BEFORE ANOTHER REQUEST MAY TAKE IT OVER.
+#
+# Claiming a run has to survive a platform that can kill a function without
+# warning. A plain "refuse if status is running" would be correct right up to
+# the first Vercel timeout, after which the run would sit in `running` forever
+# with nothing able to advance it -- trading a double-spend for a permanent
+# wedge, which is a worse bug.
+#
+# So the claim is a lease instead: hold it by writing updated_at, and let
+# another request take over only once that timestamp is older than any live
+# turn could be. 90 seconds is vercel.json's 60-second maxDuration plus margin,
+# so a function that is genuinely still working is never stolen from, and one
+# that died is recoverable without an operator.
+LEASE_SECONDS = 90
+
 NUDGE = ("You ended your turn without calling submit_findings. Either continue "
          "investigating with the tools, or call submit_findings now with what "
          "you have, including what remains uncertain.")
@@ -75,6 +90,14 @@ class Budgets:
             # question.
             max_cost_usd=config.get_float("AGENT_MAX_RUN_COST_USD", 1.0),
         )
+
+
+class RunBusy(ActionableError):
+    """Another request holds this run's turn.
+
+    ActionableError because the message is written for the caller and says what
+    to do: it names no run internals and leaks no SQL.
+    """
 
 
 class AgentDisabled(RuntimeError):
@@ -231,10 +254,50 @@ def advance(conn, run_id: str) -> dict:
                 f"Cost limit reached (${run['max_cost_usd']}).")
         return load_run(conn, run_id)
 
-    conn.execute("update ops.agent_runs set status='running', updated_at=now() "
-                 "where run_id=%s", (run_id,))
+    # CLAIM THE RUN, and treat losing the race as a real outcome.
+    #
+    # Two requests can advance the same run: a double-clicked button, a client
+    # retrying after a platform timeout, or a user with two tabs open. Nothing
+    # stopped them before. Both would call the model -- paying twice -- and
+    # then collide on agent_steps' unique (run_id, step_no), so the loser threw
+    # a database error after the expensive part was already done.
+    #
+    # One conditional UPDATE decides it. Postgres serialises the row, so
+    # exactly one request matches and the other sees no rows and stops before
+    # spending anything. The lease clause is what keeps this from wedging a run
+    # whose function was killed mid-turn; see LEASE_SECONDS.
+    claimed = conn.execute(
+        """
+        update ops.agent_runs
+           set status = 'running', updated_at = now(), turn_claimed_at = now()
+         where run_id = %s
+           and (turn_claimed_at is null
+                or turn_claimed_at < now() - make_interval(secs => %s))
+        """, (run_id, LEASE_SECONDS)).rowcount
+    conn.commit()
+    if not claimed:
+        raise RunBusy(
+            "This run is already being advanced by another request. Wait for "
+            "that turn to finish, then read the run again.")
+
+    try:
+        return _take_turn(conn, run, run_id, step_no)
+    finally:
+        # Released on every path, including a raise. Without this an exception
+        # would hold the run for the whole lease when the next request could
+        # have started at once; the lease exists for a killed process, which
+        # has no finally to run.
+        _release(conn, run_id)
+
+
+def _release(conn, run_id: str) -> None:
+    conn.execute("update ops.agent_runs set turn_claimed_at = null "
+                 "where run_id = %s", (run_id,))
     conn.commit()
 
+
+def _take_turn(conn, run: dict, run_id: str, step_no: int) -> dict:
+    """One model turn, with the run already claimed by the caller."""
     # A nudge is a user turn injected when the model stopped without finishing.
     nudge = None
     if step_no > 0:

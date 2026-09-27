@@ -192,3 +192,20 @@ def test_a_run_cannot_be_granted_permissions_its_creator_lacks(client, monkeypat
                      headers=HEADERS).json()
     assert run["actor"] == "service"
     assert sorted(run["scopes"]) == ["propose", "read"]
+
+
+def test_advancing_a_run_already_in_flight_is_a_conflict(client, own_conn):
+    """409, not 400: the request is well formed and would be valid a moment
+    later. A double-clicked button should not look like a malformed request,
+    and a client can safely back off and retry."""
+    created = client.post("/api/runs", json={"question": "why did it drop?"},
+                          headers=HEADERS)
+    run_id = created.json()["run_id"]
+
+    own_conn.execute(
+        "update ops.agent_runs set status='running', turn_claimed_at=now() "
+        "where run_id=%s", (run_id,))
+
+    response = client.post(f"/api/runs/{run_id}/advance", headers=HEADERS)
+    assert response.status_code == 409
+    assert "already being advanced" in response.json()["detail"]

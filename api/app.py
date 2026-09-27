@@ -291,6 +291,11 @@ def advance(run_id: str, _: Principal = Depends(require_principal)) -> dict:
             run = runtime.advance(conn, run_id)
         except KeyError as exc:
             raise HTTPException(404, "No such run.") from exc
+        except runtime.RunBusy as exc:
+            # 409, not 400: the request is well formed and would be valid at
+            # another moment. A double-clicked button should not look like a
+            # malformed request, and a client can safely poll and retry.
+            raise HTTPException(409, str(exc)) from exc
         except ActionableError as exc:
             raise HTTPException(400, str(exc)) from exc
         return _serialise(run)

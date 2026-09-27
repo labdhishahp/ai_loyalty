@@ -357,3 +357,107 @@ def test_a_write_enabled_run_still_obeys_the_callers_permissions(run_conn, scrip
     assert refused["ok"] is False
     assert "propose permission" in refused["error"]
     assert "viewer@test.invalid" in refused["error"]
+
+
+# ------------------------------------------------- one turn at a time
+
+def test_two_requests_cannot_advance_the_same_run_at_once(run_conn, scripted):
+    """The race, pinned.
+
+    A double-clicked button, a client retrying after a platform timeout, or two
+    open tabs. Both requests used to call the model -- paying twice -- and then
+    collide on agent_steps' unique (run_id, step_no), so the loser raised a
+    database error after the expensive part was already done. The second
+    request must now stop before spending anything.
+    """
+    scripted(fake.calls(fake.call("list_metrics", {})))
+    run_id = runtime.create_run(run_conn, QUESTION, actor="test")
+
+    # Stand where the first request stands: the run is claimed, its turn is in
+    # flight. Done by hand rather than with threads, because the property under
+    # test is the conditional UPDATE, not the scheduler.
+    run_conn.execute(
+        "update ops.agent_runs set status='running', turn_claimed_at=now() "
+        "where run_id=%s", (run_id,))
+    run_conn.commit()
+
+    with pytest.raises(runtime.RunBusy):
+        runtime.advance(run_conn, run_id)
+
+    # Nothing was spent: no step, no tool call, no tokens.
+    run = runtime.load_run(run_conn, run_id)
+    assert run["steps_used"] == 0
+    assert run["steps"] == []
+    assert run["input_tokens"] == 0
+
+
+def test_a_claim_older_than_the_lease_can_be_taken_over(run_conn, scripted):
+    """A serverless function can be killed without warning, and it has no
+    `finally` to run. If the claim were a lock rather than a lease, that run
+    would be wedged forever with nothing able to advance it -- trading a
+    double-spend for a permanent stall, which is the worse bug."""
+    scripted(
+        fake.calls(fake.call("list_metrics", {})),
+        fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)),
+    )
+    run_id = runtime.create_run(run_conn, QUESTION, actor="test")
+
+    # A turn claimed longer ago than any live turn could still be running.
+    run_conn.execute(
+        "update ops.agent_runs set status='running', "
+        "turn_claimed_at = now() - make_interval(secs => %s) where run_id=%s",
+        (runtime.LEASE_SECONDS + 30, run_id))
+    run_conn.commit()
+
+    run = runtime.advance(run_conn, run_id)
+    assert run["steps_used"] == 1, "a dead turn's run could not be recovered"
+
+
+def test_the_claim_is_released_between_turns(run_conn, scripted):
+    """The regression this design had to avoid.
+
+    An earlier version claimed the run by setting status='running'. But
+    'running' also means "this investigation is under way", which is true
+    BETWEEN turns as well as during one -- so the second turn of every
+    multi-step run was refused as a duplicate. The two facts are different and
+    need different columns.
+    """
+    scripted(
+        fake.calls(fake.call("list_metrics", {})),
+        fake.calls(fake.call("list_metrics", {"refresh": True})),
+        fake.calls(fake.call(SUBMIT_FINDINGS, FINDINGS)),
+    )
+    run_id = runtime.create_run(run_conn, QUESTION, actor="test")
+
+    runtime.advance(run_conn, run_id)
+    claimed = run_conn.execute(
+        "select turn_claimed_at from ops.agent_runs where run_id=%s",
+        (run_id,)).fetchone()[0]
+    assert claimed is None, "the claim outlived the turn"
+
+    run = runtime.advance(run_conn, run_id)          # must not raise RunBusy
+    assert run["steps_used"] == 2
+
+
+def test_the_claim_is_released_even_when_the_turn_fails(run_conn, scripted):
+    """A raise must not hold the run for the whole lease when the next request
+    could start at once. The lease is for a killed process, which has no
+    `finally`; everything else releases properly."""
+    from llm.base import LLMError
+
+    class Exploding:
+        name, model = "fake", "fake-1"
+        def complete(self, **kwargs):
+            raise LLMError("the provider fell over")
+
+    scripted()
+    runtime.factory.create = lambda name=None: Exploding()
+    run_id = runtime.create_run(run_conn, QUESTION, actor="test")
+
+    runtime.advance(run_conn, run_id)        # LLMError is handled, run fails
+
+    row = run_conn.execute(
+        "select status, turn_claimed_at from ops.agent_runs where run_id=%s",
+        (run_id,)).fetchone()
+    assert row[0] == "failed"
+    assert row[1] is None, "a failed turn left the run claimed"
