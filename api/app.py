@@ -24,6 +24,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agent import runtime
@@ -53,25 +54,95 @@ IS_SERVERLESS = config.is_serverless()
 # call lands in ops.tool_calls; going through MCP would hide those calls from
 # the application and blind the trace the whole project is built around.
 # ---------------------------------------------------------------------------
+# An operator's kill switch. Changing it redeploys on Vercel either way, but it
+# means turning MCP off is a setting rather than a code change at a bad moment.
+MCP_HTTP_ENABLED = config.get_bool("MCP_HTTP_ENABLED", True)
+
+# STATELESS ON SERVERLESS, AND THIS IS THE WHOLE DIFFERENCE THAT MATTERS.
+#
+# Streamable HTTP normally keeps per-client session state in memory: a client
+# calls initialize, gets an Mcp-Session-Id back, and sends it with every later
+# request. That works for one long-lived process and cannot work here. Vercel
+# scales the function to many instances with no affinity between them, so the
+# instance that issued a session id is usually not the instance the next
+# request reaches -- and the second request fails with a session it has never
+# heard of. Recycling instances between requests produces the same failure.
+#
+# stateless_http builds a fresh transport per request and tracks no session, so
+# any instance can serve any request. json_response goes with it: SSE exists to
+# stream over a held-open connection, which is exactly what a function that may
+# be frozen after each response cannot promise.
+#
+# A laptop keeps the stateful, streaming default, because there the session IS
+# one process and streaming is the better experience.
 mcp_server = build_http()
-mcp_app = mcp_server.streamable_http_app(streamable_http_path="/")
+mcp_app = mcp_server.streamable_http_app(
+    streamable_http_path="/",
+    stateless_http=IS_SERVERLESS,
+    json_response=IS_SERVERLESS,
+)
+
+# Whether the session manager's task group is actually running. Even in
+# stateless mode `run()` must have been entered -- it owns the task group every
+# request is dispatched through -- and it is entered from the ASGI lifespan.
+# Whether a given serverless adapter runs lifespan at all is a property of the
+# platform, not of this code, so it is checked rather than assumed.
+_mcp_running = False
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # The streamable-HTTP session manager owns per-client session state and must
-    # be running for the transport to work. Mounting the app without this yields
-    # a route that accepts requests and then fails on the first one.
-    async with mcp_server.session_manager.run():
+    global _mcp_running
+    if not MCP_HTTP_ENABLED:
         yield
+        return
+    # The streamable-HTTP session manager owns the task group requests are
+    # dispatched through and must be running for the transport to work.
+    # Mounting the app without this yields a route that accepts requests and
+    # then fails on the first one.
+    async with mcp_server.session_manager.run():
+        _mcp_running = True
+        try:
+            yield
+        finally:
+            _mcp_running = False
+
+
+async def mcp_endpoint(scope, receive, send) -> None:
+    """The MCP transport, behind a check that it was actually started.
+
+    Without this, a host that does not run ASGI lifespan gives a request that
+    hangs or dies inside the SDK with nothing pointing at the cause. A 503
+    naming the reason is the difference between a five-minute diagnosis and an
+    afternoon.
+    """
+    if not MCP_HTTP_ENABLED:
+        response = JSONResponse(
+            {"detail": "MCP over HTTP is disabled here (MCP_HTTP_ENABLED)."},
+            status_code=404)
+        await response(scope, receive, send)
+        return
+    if not _mcp_running:
+        response = JSONResponse(
+            {"detail": "The MCP session manager is not running: this host did "
+                       "not execute the ASGI lifespan. The REST API is "
+                       "unaffected."},
+            status_code=503)
+        await response(scope, receive, send)
+        return
+    await mcp_app(scope, receive, send)
 
 
 app = FastAPI(title="L-Mart AI Loyalty Operations", version="0.1.0",
               lifespan=lifespan)
-app.mount("/mcp", mcp_app)
+app.mount("/mcp", mcp_endpoint)
 
-# The browser calls this API directly in development. In production both deploy
-# under one origin, so the permissive list is scoped to localhost only.
+# CORS is for development only, and that is a statement about the architecture
+# rather than a shortcut. In production the browser never calls this API: it
+# calls the Next.js route handler at /api/proxy/*, which holds the shared secret
+# and forwards server-side. So there is no production origin to allow, and
+# adding one would mean the browser had started talking to the API directly --
+# which is the thing the proxy exists to prevent.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

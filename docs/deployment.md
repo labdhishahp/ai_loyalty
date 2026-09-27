@@ -44,6 +44,26 @@ thing that reads it is `scripts/users.py`, run from a laptop. Giving a
 deployment a key that bypasses row level security, for work it never does, is
 how blast radius grows quietly.
 
+### MCP over HTTP
+
+Mounted at `/mcp`, and **stateless when deployed**. Streamable HTTP normally
+keeps per-client session state in memory: the client calls `initialize`, gets an
+`Mcp-Session-Id`, and sends it with every later request. Vercel scales the
+function to many instances with no affinity between them, so the instance that
+issued a session id is usually not the one the next request reaches. On
+`VERCEL`, `api/app.py` therefore selects `stateless_http` and `json_response` —
+a fresh transport per request, no session to lose, no held-open stream a frozen
+function cannot promise. A laptop keeps the stateful, streaming default.
+
+Even stateless, the SDK's session manager must have been started from the ASGI
+lifespan. Whether a given host runs lifespan is a property of the platform, so
+`/mcp` checks rather than assumes: if it was never started the endpoint answers
+**503 naming the reason**, and the REST API is unaffected. `MCP_HTTP_ENABLED=false`
+turns the endpoint off entirely (404) without touching anything else.
+
+This is the one part of the deployment that cannot be confirmed without
+deploying — see the first-deploy checks below.
+
 **`maxDuration` is 60 seconds and that is enough**, because a request executes
 exactly one agent turn. The client repeats until the run finishes. A loop inside
 one request would exceed any ceiling on a long investigation — the durable run

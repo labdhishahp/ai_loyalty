@@ -202,3 +202,88 @@ def test_no_env_file_is_tracked_by_git():
               if pathlib.Path(f).name in (".env", ".env.local")
               or f.endswith(".env.production")]
     assert not leaked, f"secret files tracked: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# MCP under a serverless host
+# ---------------------------------------------------------------------------
+
+def run_in_subprocess(code: str, **env) -> str:
+    """Import the app under a different environment.
+
+    The stateless choice is made at import time, so it cannot be changed with
+    monkeypatch inside this process. A subprocess is the honest way to ask what
+    a deployment would do.
+    """
+    import os
+    import subprocess
+    environment = {**os.environ, **env}
+    result = subprocess.run([sys.executable, "-c", code], cwd=REPO,
+                            capture_output=True, text=True, env=environment)
+    assert result.returncode == 0, result.stderr[-1500:]
+    return result.stdout.strip()
+
+
+def test_mcp_is_stateless_when_deployed():
+    """Streamable HTTP normally keeps per-client sessions in memory. Vercel
+    scales to many instances with no affinity, so the instance that issued a
+    session id is usually not the one the next request reaches."""
+    out = run_in_subprocess(
+        "import api.app as a;"
+        "m = a.mcp_server.session_manager;"
+        "print(a.IS_SERVERLESS, m.stateless, m.json_response)",
+        VERCEL="1", DATABASE_POOL_URL="postgresql://pooler.invalid:6543/postgres")
+    assert out == "True True True"
+
+
+def test_mcp_keeps_sessions_and_streaming_on_a_laptop():
+    """Locally the session IS one process, and streaming is the better
+    experience. The serverless compromise should not leak into development."""
+    out = run_in_subprocess(
+        "import api.app as a;"
+        "m = a.mcp_server.session_manager;"
+        "print(a.IS_SERVERLESS, m.stateless, m.json_response)",
+        VERCEL="", VERCEL_ENV="")
+    assert out == "False False False"
+
+
+def test_mcp_refuses_clearly_when_the_lifespan_never_ran():
+    """Whether a host runs the ASGI lifespan is a property of the platform.
+
+    If it does not, the session manager's task group was never entered and the
+    SDK would hang or fail deep inside with nothing naming the cause. A 503
+    that says so is the difference between a five-minute diagnosis and an
+    afternoon. TestClient outside a context manager reproduces exactly that
+    host behaviour.
+    """
+    from fastapi.testclient import TestClient
+
+    from api.app import app
+
+    response = TestClient(app).post(
+        "/mcp/", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+    assert response.status_code == 503
+    assert "lifespan" in response.json()["detail"]
+    assert "REST API is unaffected" in response.json()["detail"]
+
+
+def test_the_rest_api_does_not_depend_on_mcp_starting():
+    """The kill switch has to be worth having: turning MCP off, or having it
+    fail, must leave investigations working."""
+    from fastapi.testclient import TestClient
+
+    from api.app import app
+
+    assert TestClient(app).get("/api/health").status_code == 200
+
+
+def test_health_does_not_echo_configuration_to_anonymous_callers():
+    """It is unauthenticated on purpose, so it reports whether things are
+    configured rather than what they point at."""
+    from fastapi.testclient import TestClient
+
+    from api.app import app
+
+    body = TestClient(app).get("/api/health").json()
+    assert "supabase_url" not in body
+    assert isinstance(body["supabase_configured"], bool)
