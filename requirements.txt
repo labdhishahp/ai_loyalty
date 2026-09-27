@@ -1,7 +1,24 @@
 # Vercel's Python runtime installs from this file, not from pyproject.toml.
-# Kept in step with pyproject's dependencies plus what the API itself needs.
-psycopg[binary]>=3.2
-python-dotenv>=1.0
-fastapi>=0.115
-anthropic>=0.40
-openai>=1.60
+#
+# EVERY runtime import of the API must appear here. Two did not, and the
+# omission was invisible locally because the virtualenv had them from
+# `pip install -e .`: `mcp` (api/app.py imports mcp_server, which imports the
+# SDK at module scope) and `PyJWT` (core/auth.py:29). Neither arrives as a
+# transitive dependency of anything below, so the function would have failed to
+# import at all -- every route, including /api/health, returning 500.
+# tests/test_deployment.py now asserts this file covers the import graph.
+#
+# UPPER BOUNDS ARE DELIBERATE. These are floors AND ceilings because this
+# project has already lost a day to a major-version bump: the MCP SDK renamed
+# FastMCP to MCPServer and switched to snake_case fields between 1.x and 2.x. A
+# bare `>=` means a Vercel build months from now resolves a major it has never
+# been tested against, and the failure appears at deploy time rather than here.
+# Raise a ceiling deliberately, with the tests run against it.
+
+psycopg[binary]>=3.2,<4
+python-dotenv>=1.0,<2
+fastapi>=0.115,<1
+anthropic>=1.7,<2
+openai>=1.60,<4
+mcp>=2.2,<3
+PyJWT>=2.9,<3

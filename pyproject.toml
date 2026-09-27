@@ -4,15 +4,21 @@ version = "0.1.0"
 description = "L-Mart AI Loyalty Operations Employee"
 requires-python = ">=3.11"
 
-# Deliberately minimal. Only two runtime dependencies exist today:
-#   psycopg  - applying migrations and COPY-loading the seed data.
-#   dotenv   - reading DATABASE_URL from .env without exporting secrets by hand.
-# The seed generator itself uses only the standard library (random, csv, datetime)
-# so that data generation is reproducible without pinning a numeric stack.
+# Kept in step with requirements.txt, which is what Vercel installs. The two
+# drifted once -- pyproject had `mcp`, requirements.txt did not -- and the
+# result was a deployment that could not import. Same set, same bounds, and a
+# test asserts they agree.
+#
+# The seed generator itself uses only the standard library (random, csv,
+# datetime) so that data generation stays reproducible without a numeric stack.
 dependencies = [
-    "psycopg[binary]>=3.2",
-    "python-dotenv>=1.0",
-    "mcp>=2.2",
+    "psycopg[binary]>=3.2,<4",
+    "python-dotenv>=1.0,<2",
+    "fastapi>=0.115,<1",
+    "anthropic>=1.7,<2",
+    "openai>=1.60,<4",
+    "mcp>=2.2,<3",
+    "PyJWT>=2.9,<3",
 ]
 
 # Declared explicitly because the repo has two top-level directories and
