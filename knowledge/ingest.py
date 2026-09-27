@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -67,6 +68,13 @@ def main() -> int:
     parser.add_argument("--reset", action="store_true",
                         help="delete existing documents first")
     args = parser.parse_args()
+
+    # The request-path budget is sized for a 60-second serverless function.
+    # Ingest is a laptop command with no such ceiling, and the 503 it waits out
+    # is a model cold start that resolves in under a minute -- so raise both,
+    # unless the operator has already said otherwise.
+    os.environ.setdefault("EMBEDDING_TIMEOUT_SECONDS", "60")
+    os.environ.setdefault("EMBEDDING_BUDGET_SECONDS", "180")
 
     files = sorted(CORPUS.glob("*.md"))
     if not files:

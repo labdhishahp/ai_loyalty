@@ -22,6 +22,32 @@ from .base import (AssistantMessage, Completion, LLMError, Message, ToolCall,
 # comparison needs the stronger model.
 DEFAULT_MODEL = "claude-sonnet-5"
 
+# HOW LONG ONE MODEL CALL MAY TAKE, and why it is not the SDK's default.
+#
+# The SDK defaults to a 600-second read timeout with two retries. The function
+# this runs inside is capped at 60 seconds by vercel.json. Those two numbers
+# disagree by a factor of ten, and the platform wins: Vercel kills the function
+# mid-call, so the tokens are spent, no step row is written, the cost is never
+# recorded, and the client sees an opaque platform error instead of a failure
+# the run can explain.
+#
+# 50 seconds is chosen against measured turns rather than guessed. Across the
+# 30 recorded steps in ops.agent_steps the mean is 11.1s, the 95th percentile
+# 24.6s and the slowest 37.0s, so 50s clears the worst turn actually observed
+# while still firing before the platform does. A timeout we own produces a
+# recorded, explainable failure; a timeout the platform owns produces silence.
+#
+# Retries are off for the same reason. A retry cannot fit inside the remaining
+# budget -- two 50-second attempts exceed the function's whole life -- so the
+# SDK's default of two would only ever turn one clean failure into a killed
+# function. Raise LLM_TIMEOUT_SECONDS together with maxDuration, never alone.
+LLM_TIMEOUT_DEFAULT = 50.0
+
+
+def request_timeout() -> float:
+    return config.get_float("LLM_TIMEOUT_SECONDS", LLM_TIMEOUT_DEFAULT)
+
+
 
 class AnthropicProvider:
     name = "anthropic"
@@ -32,7 +58,10 @@ class AnthropicProvider:
         # routine development; raise it for measured eval runs.
         self.effort = effort or config.get("ANTHROPIC_EFFORT", "medium")
         self._client = anthropic.Anthropic(
-            api_key=config.require("ANTHROPIC_API_KEY"))
+            api_key=config.require("ANTHROPIC_API_KEY"),
+            timeout=request_timeout(),
+            max_retries=0,
+        )
 
     def _to_wire(self, messages: list[Message]) -> list[dict]:
         wire: list[dict] = []

@@ -48,8 +48,36 @@ KNOWN_MODELS = {
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 
 BATCH_SIZE = 32          # measured: 32 texts return in about half a second
-TIMEOUT_SECONDS = 60
 QUERY_PREFIX = ""        # see module docstring
+
+# A DEADLINE, NOT JUST A PER-ATTEMPT TIMEOUT.
+#
+# This used to be a 60-second timeout with three attempts and a 5s/10s backoff,
+# which is a worst case of 195 seconds. That is fine for `python -m
+# knowledge.ingest` on a laptop, where patience costs nothing and the 503 being
+# waited out is a model cold start. It is wrong inside an HTTP request: the
+# function is capped at 60 seconds, so the retry policy could spend the entire
+# budget and be killed anyway -- with the model call that preceded it already
+# paid for and no findings to show.
+#
+# So retrying is now bounded by a wall-clock deadline for the whole call rather
+# than by an attempt count. Attempts stop when the budget is gone, each attempt
+# is capped at whatever is left, and a backoff that would not leave room for
+# another attempt is not taken at all. Worst case is the budget, not a
+# multiple of it.
+#
+# Ingest raises both, because a cold start there is worth waiting out.
+ATTEMPT_TIMEOUT_DEFAULT = 15.0
+BUDGET_DEFAULT = 30.0
+MAX_ATTEMPTS = 3
+
+
+def attempt_timeout() -> float:
+    return config.get_float("EMBEDDING_TIMEOUT_SECONDS", ATTEMPT_TIMEOUT_DEFAULT)
+
+
+def budget_seconds() -> float:
+    return config.get_float("EMBEDDING_BUDGET_SECONDS", BUDGET_DEFAULT)
 
 
 class EmbeddingError(ActionableError):
@@ -82,23 +110,39 @@ class Embedder:
                      "Content-Type": "application/json"},
             method="POST")
 
-        for attempt in range(3):
+        deadline = time.monotonic() + budget_seconds()
+
+        def backoff(seconds: float) -> bool:
+            """Wait, unless waiting would leave no room to try again."""
+            remaining = deadline - time.monotonic()
+            if seconds >= remaining:
+                return False
+            time.sleep(seconds)
+            return True
+
+        for attempt in range(MAX_ATTEMPTS):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise EmbeddingError(
+                    f"Embeddings gave up after {budget_seconds():.0f}s "
+                    f"(EMBEDDING_BUDGET_SECONDS). The model may be cold; "
+                    f"retrying usually succeeds.")
             try:
-                with urllib.request.urlopen(request,
-                                            timeout=TIMEOUT_SECONDS) as response:
+                with urllib.request.urlopen(
+                        request,
+                        timeout=min(attempt_timeout(), remaining)) as response:
                     raw = json.loads(response.read())
                 break
             except urllib.error.HTTPError as exc:
                 body = exc.read()[:200].decode(errors="replace")
                 # 503 is a cold start, not a failure.
-                if exc.code == 503 and attempt < 2:
-                    time.sleep(5 * (attempt + 1))
+                if exc.code == 503 and attempt < MAX_ATTEMPTS - 1 \
+                        and backoff(5 * (attempt + 1)):
                     continue
                 raise EmbeddingError(
                     f"Hugging Face returned {exc.code}: {body}") from exc
             except Exception as exc:                        # noqa: BLE001
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))
+                if attempt < MAX_ATTEMPTS - 1 and backoff(2 * (attempt + 1)):
                     continue
                 raise EmbeddingError(f"Embedding request failed: {exc}") from exc
         else:                                               # pragma: no cover

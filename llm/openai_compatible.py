@@ -34,6 +34,7 @@ from openai import APIError, OpenAI
 
 from core import config
 
+from .anthropic_provider import request_timeout
 from .base import (AssistantMessage, Completion, LLMError, Message, ToolCall,
                    ToolResultsMessage, ToolSpec, Usage, UserMessage)
 
@@ -51,6 +52,12 @@ class OpenAICompatibleProvider:
         self._client = OpenAI(
             api_key=config.require("COE_API_KEY"),
             base_url=config.require("COE_BASE_URL", "Must end in /v1."),
+            # Same budget as the Anthropic provider, for the same reason: the
+            # function is capped at 60 seconds and a client timeout above that
+            # means the platform kills the request instead of the code
+            # reporting it. See llm/anthropic_provider.py for the measurements.
+            timeout=request_timeout(),
+            max_retries=0,
         )
 
     def _to_wire(self, system: str, messages: list[Message]) -> list[dict]:

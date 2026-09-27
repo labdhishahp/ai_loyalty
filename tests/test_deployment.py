@@ -287,3 +287,52 @@ def test_health_does_not_echo_configuration_to_anonymous_callers():
     body = TestClient(app).get("/api/health").json()
     assert "supabase_url" not in body
     assert isinstance(body["supabase_configured"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Timeout budgets against the function ceiling
+# ---------------------------------------------------------------------------
+
+def max_duration_seconds() -> int:
+    import json
+    return json.loads((REPO / "vercel.json").read_text())[
+        "functions"]["api/index.py"]["maxDuration"]
+
+
+def test_the_model_call_times_out_before_the_platform_kills_it(monkeypatch):
+    """The SDK defaults to 600 seconds with two retries against a 60-second
+    function. The platform wins that argument, and when it does the tokens are
+    spent, no step row is written and the cost is never recorded. A timeout we
+    own produces a failure the run can explain."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+    from llm.anthropic_provider import AnthropicProvider
+
+    provider = AnthropicProvider()
+    assert provider._client.timeout < max_duration_seconds()
+    # A retry cannot fit in what is left, so the SDK's default of two would
+    # only ever turn one clean failure into a killed function.
+    assert provider._client.max_retries == 0
+
+
+def test_the_embedding_budget_fits_in_the_function(monkeypatch):
+    """A tool call that can outlive the request is a tool call that wastes the
+    model call preceding it."""
+    from knowledge import embeddings
+
+    assert embeddings.budget_seconds() < max_duration_seconds()
+    assert embeddings.attempt_timeout() <= embeddings.budget_seconds()
+
+
+def test_both_providers_share_one_timeout_budget(monkeypatch):
+    """Two providers with two different ideas of how long they may take is a
+    difference that would only show up in production."""
+    monkeypatch.setenv("COE_API_KEY", "k")
+    monkeypatch.setenv("COE_BASE_URL", "https://gateway.invalid/v1")
+    monkeypatch.setenv("COE_MODEL", "m")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
+
+    from llm.anthropic_provider import AnthropicProvider
+    from llm.openai_compatible import OpenAICompatibleProvider
+
+    assert (OpenAICompatibleProvider()._client.timeout
+            == AnthropicProvider()._client.timeout)

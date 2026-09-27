@@ -19,6 +19,7 @@ quality: the filters, the fusion arithmetic, and the failure cases.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -282,3 +283,108 @@ def test_passage_cite_names_the_section_when_there_is_one():
 
     assert passage("Holdouts").cite() == "campaign-governance-policy#Holdouts"
     assert passage(None).cite() == "campaign-governance-policy"
+
+
+# ---------------------------------------------------------------------------
+# The retry budget. No network: the opener is replaced.
+# ---------------------------------------------------------------------------
+
+def test_the_retry_policy_is_bounded_by_a_deadline(monkeypatch):
+    """The whole point of the change, measured rather than asserted.
+
+    The old policy was three attempts at 60s with a 5s/10s backoff -- a worst
+    case of 195 seconds inside a function Vercel kills at 60. Here the clock is
+    fake and every attempt "hangs", so a policy that ignored the deadline would
+    record attempts until it ran out of tries.
+    """
+    import urllib.error
+
+    monkeypatch.setenv("EMBEDDING_BUDGET_SECONDS", "30")
+    monkeypatch.setenv("EMBEDDING_TIMEOUT_SECONDS", "15")
+
+    now = {"t": 0.0}
+    attempts: list[float] = []
+    monkeypatch.setattr(embeddings.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(embeddings.time, "sleep",
+                        lambda seconds: now.__setitem__("t", now["t"] + seconds))
+
+    def hang(request, timeout=None):
+        attempts.append(timeout)
+        now["t"] += timeout                      # the attempt uses its timeout
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(embeddings.urllib.request, "urlopen", hang)
+
+    embedder = embeddings.Embedder(model="BAAI/bge-small-en-v1.5",
+                                   dimension=384, token="t")
+    with pytest.raises(embeddings.EmbeddingError):
+        embedder.embed_query("anything")
+
+    assert sum(attempts) + 0 <= 30, f"spent {sum(attempts)}s of a 30s budget"
+    assert now["t"] <= 30, f"wall clock reached {now['t']}s against a 30s budget"
+
+
+def test_an_attempt_never_outlives_the_remaining_budget(monkeypatch):
+    """A late attempt is capped at what is left, not at the full per-attempt
+    timeout -- otherwise the last try alone could overrun the budget."""
+    import urllib.error
+
+    monkeypatch.setenv("EMBEDDING_BUDGET_SECONDS", "20")
+    monkeypatch.setenv("EMBEDDING_TIMEOUT_SECONDS", "15")
+
+    now = {"t": 0.0}
+    attempts: list[float] = []
+    monkeypatch.setattr(embeddings.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(embeddings.time, "sleep",
+                        lambda seconds: now.__setitem__("t", now["t"] + seconds))
+
+    def hang(request, timeout=None):
+        attempts.append(timeout)
+        now["t"] += timeout
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(embeddings.urllib.request, "urlopen", hang)
+    embedder = embeddings.Embedder(model="BAAI/bge-small-en-v1.5",
+                                   dimension=384, token="t")
+    with pytest.raises(embeddings.EmbeddingError):
+        embedder.embed_query("anything")
+
+    assert attempts[0] == 15
+    assert all(a <= 15 for a in attempts)
+    assert now["t"] <= 20
+
+
+def test_a_cold_start_is_still_retried_when_there_is_time(monkeypatch):
+    """503 means the model is loading, not that the request failed. Bounding
+    the budget must not turn a recoverable cold start into a hard failure."""
+    import io
+    import urllib.error
+
+    monkeypatch.setenv("EMBEDDING_BUDGET_SECONDS", "120")
+    monkeypatch.setenv("EMBEDDING_TIMEOUT_SECONDS", "15")
+    monkeypatch.setattr(embeddings.time, "sleep", lambda seconds: None)
+
+    calls = {"n": 0}
+
+    class Response:
+        def read(self):
+            return json.dumps([[0.0] * 383 + [1.0]]).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+
+    def flaky(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.HTTPError(
+                "u", 503, "loading", {}, io.BytesIO(b"loading"))
+        return Response()
+
+    monkeypatch.setattr(embeddings.urllib.request, "urlopen", flaky)
+    embedder = embeddings.Embedder(model="BAAI/bge-small-en-v1.5",
+                                   dimension=384, token="t")
+    vector = embedder.embed_query("anything")
+
+    assert calls["n"] == 2, "the cold start was not retried"
+    assert len(vector) == 384

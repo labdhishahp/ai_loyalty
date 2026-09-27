@@ -37,6 +37,9 @@ Environment variables (Project Settings → Environment Variables):
 | `COE_BASE_URL`, `COE_API_KEY`, `COE_MODEL` | Only when `LLM_PROVIDER=coe`. This path has never been exercised against a real gateway — see `llm/openai_compatible.py`. |
 | `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | Optional; code defaults apply. |
 | `AGENT_MAX_STEPS`, `AGENT_MAX_RUN_TOKENS`, `AGENT_MAX_RUN_COST_USD`, `AGENT_ENABLED` | Optional; code defaults apply. |
+| `LLM_TIMEOUT_SECONDS` | Optional, default 50. Must stay below `maxDuration`. |
+| `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BUDGET_SECONDS` | Optional, default 15 and 30. Must stay below `maxDuration`. |
+| `MCP_HTTP_ENABLED` | Optional, default true. `false` returns 404 from `/mcp` and leaves the REST API alone. |
 | `RATE_LIMIT_RUNS_PER_HOUR`, `RATE_LIMIT_PROPOSALS_PER_HOUR` | Optional; default 20 and 10 per actor. `0` disables. |
 
 `SUPABASE_SERVICE_ROLE_KEY` is deliberately **not** in this table. The only
@@ -64,10 +67,31 @@ turns the endpoint off entirely (404) without touching anything else.
 This is the one part of the deployment that cannot be confirmed without
 deploying — see the first-deploy checks below.
 
-**`maxDuration` is 60 seconds and that is enough**, because a request executes
-exactly one agent turn. The client repeats until the run finishes. A loop inside
-one request would exceed any ceiling on a long investigation — the durable run
-model is what makes a serverless deployment viable rather than a workaround.
+### The 60-second budget
+
+**`maxDuration` is 60 seconds**, because a request executes exactly one agent
+turn. The client repeats until the run finishes. A loop inside one request would
+exceed any ceiling on a long investigation — the durable run model is what makes
+a serverless deployment viable rather than a workaround.
+
+Every outbound call is now bounded *below* that ceiling, so a slow dependency
+produces a recorded failure instead of a function the platform kills silently:
+
+| Call | Was | Now |
+| ---- | --- | --- |
+| Model request | SDK default 600s, 2 retries | `LLM_TIMEOUT_SECONDS`, default **50s**, no retries |
+| Embeddings | 60s × 3 attempts + backoff ≈ **195s** | whole-call deadline, default **30s** |
+| Tool SQL | `statement_timeout`, 30s | unchanged |
+
+The model budget is set against measured turns rather than guessed: across the
+30 steps recorded in `ops.agent_steps` the mean is 11.1s, the 95th percentile
+24.6s and the slowest 37.0s.
+
+**The honest limit:** a single turn combining a near-worst-case model call with
+a cold embedding model can still exceed 60s in total. Each part fails cleanly on
+its own budget, but the *sum* is not guaranteed to fit. If that shows up in
+practice, raise `maxDuration` (up to 300s on Pro) rather than shrinking the
+individual budgets, which would start failing turns that were going to succeed.
 
 ## 2. The frontend
 
