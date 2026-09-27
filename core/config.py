@@ -98,17 +98,48 @@ def database_url() -> str:
     return require("DATABASE_URL")
 
 
+def is_serverless() -> bool:
+    """True when running on Vercel. Both variables are set by the platform.
+
+    Read through this rather than checked inline, because several rules differ
+    between a laptop and a deployment and they should all agree on what a
+    deployment is.
+    """
+    return bool(get("VERCEL") or get("VERCEL_ENV"))
+
+
 def pool_url() -> str:
     """Transaction pooler (port 6543). Everything serving HTTP requests.
 
-    Falls back to the direct connection so local development works before the
-    pooler URL is filled in -- but logs nothing and hides nothing: a deployment
-    that needs the pooler will set it.
+    Falls back to the direct connection on a laptop, so local development works
+    before the pooler URL is filled in.
+
+    ON A DEPLOYMENT THAT FALLBACK IS REFUSED. It used to apply everywhere, with
+    a comment saying a real deployment would set the pooler URL -- which is a
+    hope, not a mechanism. The failure it allowed is the worst shape available:
+    direct connections work perfectly for one developer clicking around, and
+    exhaust the 60-connection limit only once real traffic scales the function
+    out. That passes every smoke test and fails in production.
     """
-    return get("DATABASE_POOL_URL") or database_url()
+    pooled = get("DATABASE_POOL_URL")
+    if pooled:
+        return pooled
+    if is_serverless():
+        raise ConfigError(
+            "DATABASE_POOL_URL is not set. A deployed function must use the "
+            "transaction pooler (port 6543): serverless scales to many "
+            "instances and direct connections would exhaust the database's "
+            "60-connection limit under load. Copy the pooler URL from "
+            "Supabase -> Project Settings -> Database -> Connection pooling.")
+    return database_url()
 
 
 def app_api_key() -> str | None:
-    """Shared secret for the API. Absent is tolerated locally; the API refuses
-    to start without it when deployed."""
+    """Shared secret for the API.
+
+    Absent is tolerated on a laptop. On a deployment the API refuses every
+    request rather than serving one unauthenticated -- see require_principal in
+    api/app.py, which is where the refusal belongs: /api/health stays reachable
+    so a misconfigured deployment can still be diagnosed.
+    """
     return get("APP_API_KEY")

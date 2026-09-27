@@ -39,7 +39,7 @@ from mcp_server.server import build_http
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("lmart.api")
 
-IS_SERVERLESS = bool(config.get("VERCEL") or config.get("VERCEL_ENV"))
+IS_SERVERLESS = config.is_serverless()
 
 # ---------------------------------------------------------------------------
 # MCP, mounted alongside the REST API rather than run as a separate service.
@@ -165,7 +165,10 @@ def health() -> dict:
         "coe_gateway_configured": factory.coe_is_configured(),
         "agent_enabled": config.get_bool("AGENT_ENABLED", True),
         "auth_required": config.app_api_key() is not None,
-        "supabase_url": config.get("SUPABASE_URL"),
+        # Whether identity is configured, not what it points at. This endpoint
+        # has no auth -- on purpose, so a misconfigured deployment can still be
+        # diagnosed -- so it reports booleans rather than values.
+        "supabase_configured": config.get("SUPABASE_URL") is not None,
         "mcp_endpoint": "/mcp",
         "mcp_tools": len(REGISTRY.schemas(include_writes=True)) - 1,  # no submit_findings
     }

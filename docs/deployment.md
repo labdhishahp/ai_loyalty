@@ -26,14 +26,23 @@ Environment variables (Project Settings → Environment Variables):
 
 | Variable | Notes |
 | -------- | ----- |
-| `DATABASE_POOL_URL` | **Required.** Transaction pooler, port 6543. The database allows 60 connections and serverless scales past that. |
+| `SUPABASE_URL` | **Required to import the app, not just to serve a request.** `api/app.py` builds the MCP server at module scope, which calls `require("SUPABASE_URL")`. Missing, the function fails to import and *every* route returns 500 — including `/api/health`. |
+| `DATABASE_POOL_URL` | **Required.** Transaction pooler, port 6543. The database allows 60 connections and serverless scales past that. On Vercel the code now *refuses* to fall back to the direct connection, because that fallback works in a smoke test and exhausts the limit under load. |
 | `DATABASE_URL` | Direct connection. Used by migrations; harmless here. |
-| `APP_API_KEY` | **Required in production.** The API refuses to start without it when `VERCEL` is set, because an unprotected endpoint that runs model calls spends someone else's quota. |
-| `LLM_PROVIDER` | `coe` or `anthropic`. |
-| `COE_BASE_URL`, `COE_API_KEY`, `COE_MODEL` | When using the gateway. |
-| `ANTHROPIC_API_KEY` | Fallback, or when `LLM_PROVIDER=anthropic`. |
-| `HF_TOKEN` | Embeddings for knowledge retrieval. |
+| `APP_API_KEY` | **Required in production.** Without it, a deployed API refuses every authenticated request with a 500 rather than serving one unauthenticated. `/api/health` stays reachable on purpose, so a misconfigured deployment can still be diagnosed. |
+| `ANTHROPIC_API_KEY` | Required to run an investigation. |
+| `HF_TOKEN` | Required for knowledge retrieval (embeddings). |
+| `PUBLIC_BASE_URL` | This deployment's own origin, e.g. `https://lmart-api.vercel.app`. Used for the MCP resource-server URL advertised to clients. Defaults to `http://localhost:8000`, which is wrong everywhere except a laptop. |
+| `LLM_PROVIDER` | `anthropic` (default) or `coe`. |
+| `COE_BASE_URL`, `COE_API_KEY`, `COE_MODEL` | Only when `LLM_PROVIDER=coe`. This path has never been exercised against a real gateway — see `llm/openai_compatible.py`. |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | Optional; code defaults apply. |
 | `AGENT_MAX_STEPS`, `AGENT_MAX_RUN_TOKENS`, `AGENT_MAX_RUN_COST_USD`, `AGENT_ENABLED` | Optional; code defaults apply. |
+| `RATE_LIMIT_RUNS_PER_HOUR`, `RATE_LIMIT_PROPOSALS_PER_HOUR` | Optional; default 20 and 10 per actor. `0` disables. |
+
+`SUPABASE_SERVICE_ROLE_KEY` is deliberately **not** in this table. The only
+thing that reads it is `scripts/users.py`, run from a laptop. Giving a
+deployment a key that bypasses row level security, for work it never does, is
+how blast radius grows quietly.
 
 **`maxDuration` is 60 seconds and that is enough**, because a request executes
 exactly one agent turn. The client repeats until the run finishes. A loop inside
