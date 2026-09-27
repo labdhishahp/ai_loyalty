@@ -58,10 +58,26 @@ def run_conn(conn):
     runtime.create_run = tracked
     yield conn
     runtime.create_run = original
-    if created:
-        conn.execute("delete from ops.agent_runs where run_id = any(%s)",
+    if not created:
+        return
+    # Delete what these runs produced before the runs themselves.
+    # campaign_proposals.run_id has no ON DELETE CASCADE -- on purpose, since a
+    # proposal outliving its investigation is a real state -- so deleting a run
+    # that produced one fails on the foreign key. A test that raises before its
+    # own cleanup then leaves BOTH rows behind and reports a confusing teardown
+    # error pointing at the fixture rather than at the failure. Scoped strictly
+    # to runs this fixture created; nothing else is touched.
+    conn.rollback()
+    proposals = [r[0] for r in conn.execute(
+        "select proposal_id from ops.campaign_proposals where run_id = any(%s)",
+        (created,)).fetchall()]
+    if proposals:
+        conn.execute("delete from ops.audit_log where subject_id = any(%s)",
+                     ([str(p) for p in proposals],))
+        conn.execute("delete from ops.campaign_proposals where run_id = any(%s)",
                      (created,))
-        conn.commit()
+    conn.execute("delete from ops.agent_runs where run_id = any(%s)", (created,))
+    conn.commit()
 
 
 # ---------------------------------------------------------------- happy path
