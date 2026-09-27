@@ -117,12 +117,30 @@ Deployed from `web/` (set it as the project's Root Directory).
 
 | Variable | Notes |
 | -------- | ----- |
-| `BACKEND_URL` | The API deployment's origin, e.g. `https://lmart-api.vercel.app`. |
+| `BACKEND_URL` | The API deployment's origin, e.g. `https://lmart-api.vercel.app`. **Required in production** — there is no localhost fallback there, because a silent one turns a missing variable into what looks like the API being down. |
 | `BACKEND_API_KEY` | Same value as `APP_API_KEY`. |
+| `NEXT_PUBLIC_SUPABASE_URL` | **Read at build time.** |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Read at build time.** |
 
-Neither is prefixed `NEXT_PUBLIC_`. That prefix compiles a value into the browser
-bundle, and `BACKEND_API_KEY` is a secret — the proxy route handler exists
-precisely so the browser never holds it.
+The first two are not prefixed `NEXT_PUBLIC_`. That prefix compiles a value into
+the browser bundle, and `BACKEND_API_KEY` is a secret — the proxy route handler
+exists precisely so the browser never holds it.
+
+**The `NEXT_PUBLIC_` pair is read at build time, not at runtime.** Next.js
+compiles them into the bundle, so setting them after a deploy changes nothing
+until the next build: the app would ship with sign-in permanently disabled, and
+the symptom looks like a bug in the auth code rather than a missing variable.
+`next.config.ts` refuses a production build without them, which is the last
+moment that is cheap to fix.
+
+### Why the browser never needs CORS
+
+The browser calls `/api/proxy/*` on the **frontend's** origin. That route
+handler holds `BACKEND_API_KEY` and forwards server-side to `BACKEND_URL`. So
+the two projects being on different origins costs nothing, the secret never
+reaches the browser, and the API's CORS list stays scoped to localhost for
+development. If a production origin ever needs adding to that list, something
+has started calling the API directly and the proxy has been bypassed.
 
 ## 3. Database
 

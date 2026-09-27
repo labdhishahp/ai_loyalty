@@ -7,14 +7,35 @@
  *
  * BACKEND_API_KEY and BACKEND_URL are deliberately NOT prefixed NEXT_PUBLIC_:
  * that prefix is what compiles a value into the browser bundle.
+ *
+ * The API is a SEPARATE Vercel project, so BACKEND_URL is a different origin in
+ * production. Being a route handler rather than a rewrite is what keeps the key
+ * server-side, and it is also why the browser needs no CORS grant from the API.
  */
 
 import { NextRequest } from "next/server";
 
-const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+// The localhost default is for development only. In production it would turn
+// a missing variable into what looks like the API being down -- a 502 pointing
+// at 127.0.0.1 from a deployed function, which reads as a network problem
+// rather than a configuration one. Deployed, an unset BACKEND_URL says so.
+const IS_PRODUCTION = process.env.VERCEL_ENV === "production";
+const BACKEND = process.env.BACKEND_URL ?? (IS_PRODUCTION ? "" : "http://127.0.0.1:8000");
 const KEY = process.env.BACKEND_API_KEY ?? "";
 
 async function forward(request: NextRequest, path: string[]) {
+  if (!BACKEND) {
+    return Response.json(
+      {
+        detail:
+          "BACKEND_URL is not set on this deployment. The frontend and the " +
+          "Python API are separate Vercel projects; set BACKEND_URL to the " +
+          "API deployment's origin.",
+      },
+      { status: 500 },
+    );
+  }
+
   const search = request.nextUrl.search;
   const target = `${BACKEND}/api/${path.join("/")}${search}`;
 
