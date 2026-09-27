@@ -157,6 +157,29 @@ Supabase's dashboard offers connection strings in a Prisma flavour that appends
 `?pgbouncer=true`. libpq has no such parameter; `core/db.py` strips it, so either
 form can be pasted.
 
+## 4. Checks on the first deploy
+
+These are the things no local test can settle, because they are properties of
+the platform rather than of this repository.
+
+| Check | Expect | If it fails |
+| ----- | ------ | ----------- |
+| `GET /api/health` | 200 | The function did not import. Almost always a missing `SUPABASE_URL` or a dependency, both of which have tests, so suspect the environment first. |
+| `GET /api/me` with `X-API-Key` | `role: service` | `APP_API_KEY` mismatch. |
+| `GET /api/me` with a Supabase bearer token | the signed-in role | JWKS fetch, or no row in `ops.user_roles`. |
+| One `POST /api/runs` → repeated `/advance` to terminal | completes | Watch for a turn killed at 60s: `LLM_TIMEOUT_SECONDS` should fire first. |
+| A question that searches the corpus | cites a document | Embeddings; check `HF_TOKEN` and the budget. |
+| Double-click advance | one 200, one 409 | The claim did not take. |
+| Connections during parallel requests | well under 60 | `DATABASE_POOL_URL` not actually the pooler. |
+| Trip the rate limiter | 429 with `Retry-After` | — |
+| Frontend → proxy → API | renders a run | `BACKEND_URL` or `BACKEND_API_KEY`. |
+| `POST /mcp/` `initialize`, then a follow-up call | both succeed | **The one genuine unknown.** A 503 naming the lifespan means the host does not run ASGI lifespan; set `MCP_HTTP_ENABLED=false` and MCP stays available over stdio, with the REST API unaffected. |
+
+Cold start is worth timing once. The function imports `anthropic`, `openai`,
+`mcp` and `fastapi`, which is most of its startup cost. `openai` is only needed
+for the CoE provider, which has never run against a real gateway; dropping it
+would be the first thing to try if cold starts are a problem.
+
 ## Not configured, deliberately
 
 **No email provider.** Execution writes a real campaign and real per-recipient
