@@ -25,7 +25,11 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-import httpx
+# httpx2, not httpx: that is what the OpenAI SDK actually depends on, and
+# openai.APIError annotates its own parameter as `request: httpx2.Request`.
+# The old import worked only because a stale httpx happened to be present in
+# one developer virtualenv; a clean install has never had it.
+import httpx2
 import pytest
 from openai import APIError
 
@@ -289,7 +293,7 @@ def test_a_gateway_error_is_raised_as_the_neutral_llm_error(gateway):
     """The runtime handles LLMError. An openai.APIError escaping from here
     would cross the provider boundary the whole abstraction exists to hold."""
     failure = APIError("gateway exploded",
-                       request=httpx.Request("POST", "https://gateway.invalid/v1"),
+                       request=httpx2.Request("POST", "https://gateway.invalid/v1"),
                        body=None)
     provider = gateway(failure)
     with pytest.raises(LLMError) as exc:

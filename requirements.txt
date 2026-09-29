@@ -1,4 +1,10 @@
-# Vercel's Python runtime installs from this file, not from pyproject.toml.
+# WHAT INSTALLS WHAT, as of @vercel/python@17.
+#
+# The builder installs from pyproject.toml (then uv.lock), NOT from this file.
+# An earlier comment here claimed the opposite, which was true of the pinned
+# 4.3.1 builder and is no longer. This file is what a developer installs from
+# locally, and the two are kept identical by a test -- so the deployment is
+# still covered either way, but the reason is worth stating correctly.
 #
 # EVERY runtime import of the API must appear here. Two did not, and the
 # omission was invisible locally because the virtualenv had them from

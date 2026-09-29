@@ -2,7 +2,12 @@
 name = "lmart"
 version = "0.1.0"
 description = "L-Mart AI Loyalty Operations Employee"
-requires-python = ">=3.11"
+# 3.12 is set by the DEPLOYMENT TARGET, not by preference. Vercel's Python
+# builder reads this field to choose an interpreter, and @vercel/python@17
+# installs vercel-runtime, which requires >=3.12. Leaving 3.11 here makes the
+# builder select 3.11 and then fail to resolve its own runtime -- the build
+# error names vercel-runtime, not this line, so it is worth saying why.
+requires-python = ">=3.12"
 
 # Kept in step with requirements.txt, which is what Vercel installs. The two
 # drifted once -- pyproject had `mcp`, requirements.txt did not -- and the

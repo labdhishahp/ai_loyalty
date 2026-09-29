@@ -11,6 +11,15 @@
 # The FRONTEND project sets web/ as its root directory, so this file does not
 # apply to it.
 
+# SECRETS FIRST. `vercel build` puts every project file into the function's
+# upload manifest, and a local .env landed in it -- 10,601 files, including
+# real credentials. Nothing here is loaded at runtime on Vercel anyway:
+# environment variables come from the platform, and core/config.py's
+# load_dotenv() is a no-op when the file is absent.
+.env
+.env.*
+!.env.example
+
 web/
 tests/
 docs/
@@ -19,8 +28,10 @@ seed/
 scripts/
 db/migrations/
 .venv/
+.venv312/
 .pytest_cache/
 *.egg-info/
+uv.lock
 
 # Generated seed data. Large, regenerable, and never read at runtime -- the
 # corpus the API queries lives in Postgres, not on disk.

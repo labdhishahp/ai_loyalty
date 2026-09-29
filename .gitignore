@@ -18,3 +18,9 @@ web/out/
 node_modules/
 .vercel/
 web/tsconfig.tsbuildinfo
+
+# Written by `vercel build` / uv on every run, derived from pyproject.toml's
+# requires-python. Regenerated each build, so committing them only creates
+# drift between the file and the field that actually decides the version.
+.python-version
+uv.lock
