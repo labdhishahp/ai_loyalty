@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS RATHER THAN os.environ EVERYWHERE.
 
-A .env file with `COE_API_KEY=` (blank, waiting to be filled in) sets the
+A .env file with `OPENAI_COMPAT_API_KEY=` (blank, waiting to be filled in) sets the
 variable to the empty string, not to nothing. `os.environ.get("X", default)`
 then returns "" and the default never applies. That failure is quiet and
 confusing: a setting appears configured, behaves as unset, and the error

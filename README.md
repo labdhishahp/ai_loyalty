@@ -116,5 +116,5 @@ actions/      audience resolution, policy engine, proposals, approval, execution
 api/          FastAPI surface
 web/          Next.js UI
 eval/         retrieval eval, answer key, grader
-docs/         architecture, planted truths, deployment, CoE investigation
+docs/         architecture, planted truths, deployment, MCP
 ```

@@ -86,7 +86,7 @@ export type Me = {
 export type Health = {
   ok: boolean;
   llm_provider_configured: string;
-  coe_gateway_configured: boolean;
+  openai_compatible_configured: boolean;
   agent_enabled: boolean;
   auth_required: boolean;
 };

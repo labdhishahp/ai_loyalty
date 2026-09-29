@@ -33,8 +33,8 @@ Environment variables (Project Settings → Environment Variables):
 | `ANTHROPIC_API_KEY` | Required to run an investigation. |
 | `HF_TOKEN` | Required for knowledge retrieval (embeddings). |
 | `PUBLIC_BASE_URL` | This deployment's own origin, e.g. `https://lmart-api.vercel.app`. Used for the MCP resource-server URL advertised to clients. Defaults to `http://localhost:8000`, which is wrong everywhere except a laptop. |
-| `LLM_PROVIDER` | `anthropic` (default) or `coe`. |
-| `COE_BASE_URL`, `COE_API_KEY`, `COE_MODEL` | Only when `LLM_PROVIDER=coe`. This path has never been exercised against a real gateway — see `llm/openai_compatible.py`. |
+| `LLM_PROVIDER` | `anthropic` (default) or `openai_compatible`. |
+| `OPENAI_COMPAT_BASE_URL`, `OPENAI_COMPAT_API_KEY`, `OPENAI_COMPAT_MODEL` | Only when `LLM_PROVIDER=openai_compatible`. This path has never been exercised against a real gateway — see `llm/openai_compatible.py`. |
 | `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT` | Optional; code defaults apply. |
 | `AGENT_MAX_STEPS`, `AGENT_MAX_RUN_TOKENS`, `AGENT_MAX_RUN_COST_USD`, `AGENT_ENABLED` | Optional; code defaults apply. |
 | `LLM_TIMEOUT_SECONDS` | Optional, default 50. Must stay below `maxDuration`. |
@@ -177,7 +177,7 @@ the platform rather than of this repository.
 
 Cold start is worth timing once. The function imports `anthropic`, `openai`,
 `mcp` and `fastapi`, which is most of its startup cost. `openai` is only needed
-for the CoE provider, which has never run against a real gateway; dropping it
+for the OpenAI-compatible provider, which has never run against a real gateway; dropping it
 would be the first thing to try if cold starts are a problem.
 
 ## Not configured, deliberately

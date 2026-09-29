@@ -56,7 +56,7 @@ def scripted(monkeypatch, *completions):
 def test_health_reports_configuration_without_calling_anything(client):
     body = client.get("/api/health").json()
     assert body["ok"] is True
-    assert "coe_gateway_configured" in body
+    assert "openai_compatible_configured" in body
     assert body["auth_required"] is True
 
 

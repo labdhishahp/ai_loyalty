@@ -1,7 +1,8 @@
 """The OpenAI-compatible adapter, against a fake gateway.
 
-WHY THIS EXISTS. This provider was written for the CoE AI Gateway, whose base
-URL and model id could never be discovered, so it has never made a real request.
+WHY THIS EXISTS. This provider was written for an OpenAI-compatible gateway
+whose base URL and model id were not available while it was built, so it has
+never made a real request.
 Until now it also had no tests, which meant the repository contained a working-
 looking fallback that nothing had ever executed -- a claim rather than a fact.
 
@@ -75,9 +76,9 @@ def gateway(monkeypatch):
     The substitution happens on the OpenAI class itself, before __init__ runs,
     so no client capable of making a request is ever constructed.
     """
-    monkeypatch.setenv("COE_MODEL", "some-org/some-model")
-    monkeypatch.setenv("COE_API_KEY", "not-a-real-key")
-    monkeypatch.setenv("COE_BASE_URL", "https://gateway.invalid/v1")
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "some-org/some-model")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "https://gateway.invalid/v1")
 
     created: dict = {}
 
@@ -111,12 +112,12 @@ def test_the_client_is_pointed_at_the_configured_gateway(gateway):
 def test_a_missing_base_url_is_refused_with_a_usable_message(monkeypatch):
     """The gateway's URL was never discovered, so this is the error a future
     operator will actually meet. It has to say what is missing."""
-    monkeypatch.setenv("COE_MODEL", "m")
-    monkeypatch.setenv("COE_API_KEY", "k")
-    monkeypatch.delenv("COE_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "m")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "k")
+    monkeypatch.delenv("OPENAI_COMPAT_BASE_URL", raising=False)
     with pytest.raises(Exception) as exc:
         openai_compatible.OpenAICompatibleProvider()
-    assert "COE_BASE_URL" in str(exc.value)
+    assert "OPENAI_COMPAT_BASE_URL" in str(exc.value)
 
 
 # ------------------------------------------------------- request translation

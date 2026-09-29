@@ -1,5 +1,5 @@
-"""OpenAI-compatible adapter — the CoE AI Gateway, and anything speaking the
-same protocol (LiteLLM, vLLM, SGLang, OpenRouter, Together).
+"""OpenAI-compatible adapter — for any gateway or server speaking the OpenAI
+chat-completions protocol (LiteLLM, vLLM, SGLang, OpenRouter, Together).
 
 WHAT IS VERIFIED, AND WHAT IS NOT. Be precise about this, because a provider
 that looks like a working fallback but has never run is worse than an absent
@@ -11,13 +11,13 @@ one -- it invites someone to rely on it.
              finish-reason mapping, malformed JSON, missing usage, and that a
              gateway error surfaces as LLMError. No network, no key, no cost.
 
-  NOT        That any real endpoint accepts these requests. The CoE gateway's
-             base URL and model id could never be discovered (see
-             docs/coe-gateway-investigation.md), so this code has never made a
-             live call. Whether a given endpoint implements `tools` at all is a
+  NOT        That any real endpoint accepts these requests. No gateway base
+             URL and model id were available while this was built, so this
+             code has never made a live call. Whether a given endpoint implements `tools` at all is a
              property of that endpoint, and no test here can establish it.
 
-Filling in COE_BASE_URL and COE_MODEL is all that should be required -- no code
+Filling in OPENAI_COMPAT_BASE_URL, OPENAI_COMPAT_MODEL and
+OPENAI_COMPAT_API_KEY is all that should be required -- no code
 change -- but "should be" is the honest tense until someone runs it.
 
 The one real difference from Anthropic is tool results. Anthropic wants every
@@ -44,14 +44,14 @@ STOP_REASONS = {"stop": "end_turn", "tool_calls": "tool_use",
 
 
 class OpenAICompatibleProvider:
-    name = "coe"
+    name = "openai_compatible"
 
     def __init__(self, model: str | None = None):
         self.model = model or config.require(
-            "COE_MODEL", "The exact model id the gateway expects.")
+            "OPENAI_COMPAT_MODEL", "The exact model id the gateway expects.")
         self._client = OpenAI(
-            api_key=config.require("COE_API_KEY"),
-            base_url=config.require("COE_BASE_URL", "Must end in /v1."),
+            api_key=config.require("OPENAI_COMPAT_API_KEY"),
+            base_url=config.require("OPENAI_COMPAT_BASE_URL", "Must end in /v1."),
             # Same budget as the Anthropic provider, for the same reason: the
             # function is capped at 60 seconds and a client timeout above that
             # means the platform kills the request instead of the code
@@ -95,7 +95,7 @@ class OpenAICompatibleProvider:
                        for t in tools] or None,
             )
         except APIError as exc:
-            raise LLMError(f"CoE gateway request failed: {exc}") from exc
+            raise LLMError(f"OpenAI-compatible gateway request failed: {exc}") from exc
 
         choice = response.choices[0]
         calls = []

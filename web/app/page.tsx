@@ -89,8 +89,9 @@ export default function InvestigatePage() {
           {health && (
             <span className="meta" style={{ marginLeft: "auto" }}>
               {health.llm_provider_configured}
-              {!health.coe_gateway_configured &&
-                health.llm_provider_configured === "coe" && " → anthropic (fallback)"}
+              {!health.openai_compatible_configured &&
+                health.llm_provider_configured === "openai_compatible" &&
+                " → anthropic (fallback)"}
             </span>
           )}
         </div>

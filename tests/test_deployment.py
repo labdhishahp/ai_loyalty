@@ -326,9 +326,9 @@ def test_the_embedding_budget_fits_in_the_function(monkeypatch):
 def test_both_providers_share_one_timeout_budget(monkeypatch):
     """Two providers with two different ideas of how long they may take is a
     difference that would only show up in production."""
-    monkeypatch.setenv("COE_API_KEY", "k")
-    monkeypatch.setenv("COE_BASE_URL", "https://gateway.invalid/v1")
-    monkeypatch.setenv("COE_MODEL", "m")
+    monkeypatch.setenv("OPENAI_COMPAT_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_COMPAT_BASE_URL", "https://gateway.invalid/v1")
+    monkeypatch.setenv("OPENAI_COMPAT_MODEL", "m")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "not-a-real-key")
 
     from llm.anthropic_provider import AnthropicProvider

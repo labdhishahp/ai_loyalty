@@ -6,7 +6,8 @@ The abstraction sits one level above "generate text": an agent needs
 
 Anthropic and OpenAI-compatible endpoints differ in wire format, not in shape.
 Keeping the neutral form here means the agent loop, the trace, the eval and the
-UI are all written once, and swapping Qwen for Claude is configuration.
+UI are all written once, and swapping one provider's model for another is
+configuration.
 
 WHY NOT REUSE A PROVIDER'S MESSAGE TYPE. Tool results are where the two diverge
 most: Anthropic puts every result in ONE user message as tool_result blocks,

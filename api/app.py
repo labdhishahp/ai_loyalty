@@ -233,7 +233,7 @@ def health() -> dict:
     return {
         "ok": True,
         "llm_provider_configured": config.get("LLM_PROVIDER", "anthropic"),
-        "coe_gateway_configured": factory.coe_is_configured(),
+        "openai_compatible_configured": factory.openai_compatible_is_configured(),
         "agent_enabled": config.get_bool("AGENT_ENABLED", True),
         "auth_required": config.app_api_key() is not None,
         # Whether identity is configured, not what it points at. This endpoint
