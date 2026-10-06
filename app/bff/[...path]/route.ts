@@ -20,7 +20,18 @@ import { NextRequest } from "next/server";
 // the normal case. BACKEND_URL stays as an override for pointing at an API
 // deployed elsewhere, and the localhost default covers `next dev` against a
 // separately running uvicorn.
-const SELF = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
+// VERCEL_PROJECT_PRODUCTION_URL before VERCEL_URL, and the order matters.
+// VERCEL_URL is the DEPLOYMENT-specific host, which sits behind Deployment
+// Protection -- so forwarding there makes the handler fetch a URL it is not
+// authorised for and faithfully relay a 401 that looks like the API rejecting
+// the user. The project's production alias is the host the public actually
+// reaches, and is not protected.
+const SELF =
+  process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "";
 const BACKEND = process.env.BACKEND_URL || SELF || "http://127.0.0.1:8000";
 const KEY = process.env.BACKEND_API_KEY ?? "";
 
