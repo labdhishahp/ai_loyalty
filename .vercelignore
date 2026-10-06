@@ -1,15 +1,12 @@
-# For the API project, which deploys from the repository root.
+# ONE project builds both halves from this directory: Next.js from app/, lib/
+# and components/, and the Python function from api/ plus core/, agent/,
+# tools/, llm/, knowledge/, actions/, metrics/ and mcp_server/.
 #
-# The function needs api/, core/, agent/, tools/, llm/, knowledge/, actions/,
-# metrics/ and mcp_server/. Everything listed here is either a different
-# deployment or a laptop-only tool, and shipping it only enlarges the bundle
-# and the surface. Nothing here is imported on the request path -- there is a
-# test (test_requirements_covers_every_runtime_import) that walks the actual
-# import graph of the runtime packages, so this list cannot quietly drop
-# something the function needs.
-#
-# The FRONTEND project sets web/ as its root directory, so this file does not
-# apply to it.
+# So nothing either half needs may be listed here. What remains is laptop-only
+# tooling and test data, which only enlarges the upload. A test
+# (test_requirements_covers_every_runtime_import) walks the real import graph
+# of the runtime packages, so this list cannot quietly drop something the
+# function needs.
 
 # SECRETS FIRST. `vercel build` puts every project file into the function's
 # upload manifest, and a local .env landed in it -- 10,601 files, including
@@ -20,7 +17,6 @@
 .env.*
 !.env.example
 
-web/
 tests/
 docs/
 eval/
@@ -32,6 +28,7 @@ db/migrations/
 .pytest_cache/
 *.egg-info/
 uv.lock
+.vercel_python_packages/
 
 # Generated seed data. Large, regenerable, and never read at runtime -- the
 # corpus the API queries lives in Postgres, not on disk.

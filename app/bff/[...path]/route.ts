@@ -8,19 +8,20 @@
  * BACKEND_API_KEY and BACKEND_URL are deliberately NOT prefixed NEXT_PUBLIC_:
  * that prefix is what compiles a value into the browser bundle.
  *
- * The API is a SEPARATE Vercel project, so BACKEND_URL is a different origin in
- * production. Being a route handler rather than a rewrite is what keeps the key
- * server-side, and it is also why the browser needs no CORS grant from the API.
+ * The frontend and the Python API ship as ONE Vercel project, so the API is this
+ * same deployment. Being a route handler rather than a rewrite is what keeps the
+ * key server-side, and it is also why the browser needs no CORS grant.
  */
 
 import { NextRequest } from "next/server";
 
-// The localhost default is for development only. In production it would turn
-// a missing variable into what looks like the API being down -- a 502 pointing
-// at 127.0.0.1 from a deployed function, which reads as a network problem
-// rather than a configuration one. Deployed, an unset BACKEND_URL says so.
-const IS_PRODUCTION = process.env.VERCEL_ENV === "production";
-const BACKEND = process.env.BACKEND_URL ?? (IS_PRODUCTION ? "" : "http://127.0.0.1:8000");
+// Where to forward. One project means the Python API is THIS deployment, and
+// VERCEL_URL is the host Vercel assigns it -- so nothing needs configuring in
+// the normal case. BACKEND_URL stays as an override for pointing at an API
+// deployed elsewhere, and the localhost default covers `next dev` against a
+// separately running uvicorn.
+const SELF = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
+const BACKEND = process.env.BACKEND_URL || SELF || "http://127.0.0.1:8000";
 const KEY = process.env.BACKEND_API_KEY ?? "";
 
 async function forward(request: NextRequest, path: string[]) {
@@ -28,9 +29,7 @@ async function forward(request: NextRequest, path: string[]) {
     return Response.json(
       {
         detail:
-          "BACKEND_URL is not set on this deployment. The frontend and the " +
-          "Python API are separate Vercel projects; set BACKEND_URL to the " +
-          "API deployment's origin.",
+          "No API origin resolved: neither VERCEL_URL nor BACKEND_URL is set.",
       },
       { status: 500 },
     );

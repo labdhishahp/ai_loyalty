@@ -1,5 +1,5 @@
 /**
- * Every call to the Python API goes through /api/proxy, never straight to it.
+ * Every call to the Python API goes through /bff, never straight to it.
  *
  * WHY. The API is protected by a shared secret. A browser that held that secret
  * would expose it to anyone who opened devtools, and a NEXT_PUBLIC_ variable is
@@ -7,6 +7,13 @@
  * handler: it holds the key, the browser holds nothing.
  *
  * It also means the browser has one origin to talk to, so no CORS in production.
+ *
+ * WHY /bff AND NOT /api/proxy. The frontend and the Python API now ship as one
+ * Vercel project, so they share a URL namespace. vercel.json rewrites /api/*
+ * to the Python function, and Vercel turns api/*.py into functions at /api/*
+ * as well -- so a Next.js route handler under app/api/ would be contending for
+ * the same paths, and which one won would depend on Vercel's precedence rules
+ * rather than on anything stated here. A separate prefix removes the question.
  */
 
 export class ApiError extends Error {
@@ -24,7 +31,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     ? (await supabase.auth.getSession()).data.session?.access_token
     : undefined;
 
-  const response = await fetch(`/api/proxy${path}`, {
+  const response = await fetch(`/bff${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",

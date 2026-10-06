@@ -53,7 +53,7 @@ python -m knowledge.build_corpus && python -m knowledge.ingest --reset
 ```bash
 # API
 uvicorn api.app:app --port 8000
-# UI, in web/
+# UI, from the repository root
 cp .env.example .env.local && npm install && npm run dev
 ```
 
@@ -114,7 +114,7 @@ agent/        system prompt, structured findings, the durable run loop
 knowledge/    corpus, embeddings, hybrid retrieval
 actions/      audience resolution, policy engine, proposals, approval, execution
 api/          FastAPI surface
-web/          Next.js UI
+app/ lib/ components/   Next.js UI
 eval/         retrieval eval, answer key, grader
 docs/         architecture, planted truths, deployment, MCP
 ```

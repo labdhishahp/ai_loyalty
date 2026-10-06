@@ -1,16 +1,19 @@
 import type { NextConfig } from "next";
 
 /**
- * The frontend deploys as its OWN Vercel project, with `web/` as the root
- * directory. The Python API is a separate project — see docs/deployment.md.
- * Earlier comments here and in .env.example claimed both shipped from one
- * project, which contradicted the runbook and would have sent BACKEND_URL to
- * the wrong origin.
+ * ONE Vercel project serves both halves from this directory: Next.js builds
+ * from app/, lib/ and components/, and vercel.json turns api/index.py into a
+ * Python function with /api/* and /mcp/* rewritten to it. One production URL,
+ * one set of environment variables.
  *
  * The browser never calls the API directly, in development or production. It
- * calls the route handler at /api/proxy/*, which holds the shared secret and
+ * calls the route handler at /bff/*, which holds the shared secret and
  * forwards server-side. That is why there is no CORS configuration here and
  * no NEXT_PUBLIC_ variable pointing at the API.
+ *
+ * The proxy lives at /bff rather than under app/api/ because the Python
+ * function already owns /api/* in this project; two owners for one prefix is
+ * a routing question nobody should have to answer at deploy time.
  */
 
 // NEXT_PUBLIC_* are compiled into the bundle at BUILD time, not read at

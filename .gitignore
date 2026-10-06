@@ -12,15 +12,19 @@ venv/
 .env*.local
 
 # Build output and dependencies
-web/node_modules/
-web/.next/
-web/out/
 node_modules/
+.next/
+out/
 .vercel/
-web/tsconfig.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Written by `vercel build` / uv on every run, derived from pyproject.toml's
 # requires-python. Regenerated each build, so committing them only creates
 # drift between the file and the field that actually decides the version.
 .python-version
 uv.lock
+
+# Written by `vercel build`: the Python dependency tree it installs for the
+# function bundle. Regenerated every build, ~850k lines, and never a source of
+# truth -- pyproject.toml and requirements.txt are.
+.vercel_python_packages/

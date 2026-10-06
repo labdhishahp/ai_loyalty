@@ -1,21 +1,34 @@
 # Deployment
 
-Two Vercel projects against one Supabase database.
+One Vercel project, one production URL, one Supabase database.
 
-## Why two projects, not one
+## How one project serves both halves
 
-The Python API and the Next.js app have different runtimes, different build
-pipelines and different dependency files. One project each keeps both builds
-trivial, and the frontend already talks to the API through a server-side proxy
-that takes a `BACKEND_URL` — so a remote API needs no code change at all.
+Vercel reads a single Root Directory (`.`) and does two independent things with
+it: it detects Next.js from `package.json` and builds the frontend, and it turns
+`api/*.py` into Python serverless functions. So both halves ship from one build.
 
-The cost is two deployments to keep in step. That is a smaller cost than a build
-configuration that has to satisfy two toolchains at once.
+```
+/                 Next.js page          (app/page.tsx)
+/runs/<id>        Next.js page
+/bff/*            Next.js route handler — holds the API key, forwards server-side
+/api/*            Python function       (vercel.json rewrite -> api/index)
+/mcp, /mcp/*      Python function       (same)
+```
 
-## 1. The API
+This is why the Next.js app lives at the repository root rather than in `web/`:
+Vercel looks for the framework and for `api/` in the *same* folder, so a frontend
+one level down is never built. It is also why the proxy sits at `/bff` and not
+under `app/api/` — the Python function already owns `/api/*`, and two owners for
+one prefix is a precedence question nobody should have to answer at deploy time.
 
-Deployed from the repository root. `vercel.json` routes every `/api/*` request to
-`api/index.py`, which exports the FastAPI app.
+`vercel.json` pins `"framework": "nextjs"` so the setting lives in the repository
+rather than only in dashboard state.
+
+## 1. Deploying
+
+Deployed from the repository root. `vercel.json` routes every `/api/*` and
+`/mcp/*` request to `api/index.py`, which exports the FastAPI app.
 
 ```bash
 vercel login
@@ -111,20 +124,20 @@ its own budget, but the *sum* is not guaranteed to fit. If that shows up in
 practice, raise `maxDuration` (up to 300s on Pro) rather than shrinking the
 individual budgets, which would start failing turns that were going to succeed.
 
-## 2. The frontend
+## 2. Frontend variables
 
-Deployed from `web/` (set it as the project's Root Directory).
+Same project, same Environment Variables screen.
 
 | Variable | Notes |
 | -------- | ----- |
-| `BACKEND_URL` | The API deployment's origin, e.g. `https://lmart-api.vercel.app`. **Required in production** — there is no localhost fallback there, because a silent one turns a missing variable into what looks like the API being down. |
-| `BACKEND_API_KEY` | Same value as `APP_API_KEY`. |
+| `BACKEND_API_KEY` | Same value as `APP_API_KEY`. Used by the `/bff` handler. |
 | `NEXT_PUBLIC_SUPABASE_URL` | **Read at build time.** |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Read at build time.** |
+| `BACKEND_URL` | **Optional.** The `/bff` handler defaults to this deployment's own origin via `VERCEL_URL`, because the API *is* this deployment. Set it only to point at an API running elsewhere, e.g. a local uvicorn during `next dev`. |
 
-The first two are not prefixed `NEXT_PUBLIC_`. That prefix compiles a value into
-the browser bundle, and `BACKEND_API_KEY` is a secret — the proxy route handler
-exists precisely so the browser never holds it.
+`BACKEND_API_KEY` is not prefixed `NEXT_PUBLIC_`. That prefix compiles a value
+into the browser bundle, and this is a secret — the `/bff` route handler exists
+precisely so the browser never holds it.
 
 **The `NEXT_PUBLIC_` pair is read at build time, not at runtime.** Next.js
 compiles them into the bundle, so setting them after a deploy changes nothing
