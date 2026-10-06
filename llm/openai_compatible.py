@@ -87,7 +87,13 @@ class OpenAICompatibleProvider:
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
-                max_tokens=max_tokens,
+                # max_completion_tokens, not max_tokens. The gpt-5 family
+                # rejects the older name outright -- "Unsupported parameter:
+                # 'max_tokens' is not supported with this model" -- and gpt-4.x
+                # accepts both, so one unconditional parameter covers every
+                # model rather than a branch that has to be kept in step with
+                # a vendor's naming. Verified against both before changing it.
+                max_completion_tokens=max_tokens,
                 messages=self._to_wire(system, messages),
                 tools=[{"type": "function",
                         "function": {"name": t.name, "description": t.description,
