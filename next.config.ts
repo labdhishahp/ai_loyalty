@@ -36,6 +36,17 @@ if (process.env.VERCEL_ENV === "production") {
 
 const config: NextConfig = {
   reactStrictMode: true,
+
+  // /mcp and /mcp/* are rewritten to the Python function, and Starlette's
+  // app.mount("/mcp", ...) redirects /mcp to /mcp/. Next.js normalises the
+  // other way by default, 308-ing /mcp/ back to /mcp -- so the two bounced the
+  // request between them until the client gave up (50 redirects, observed).
+  // Neither side is wrong on its own; they just disagree, and only one of them
+  // can own the answer for a path the other is serving.
+  //
+  // This hands trailing-slash normalisation to whatever serves the route. Next
+  // pages are unaffected: they are reached without trailing slashes anyway.
+  skipTrailingSlashRedirect: true,
 };
 
 export default config;
